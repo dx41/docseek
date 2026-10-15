@@ -561,3 +561,61 @@ class ResultActionsTest(unittest.TestCase):
         text = self.window.status_label.get_text()
         self.assertIn("测试动作", text)
         self.assertIn("故意炸一个", text)
+
+
+@unittest.skipUnless(HAVE_GTK, "需要 GTK3 与 PyGObject")
+@unittest.skipUnless(os.environ.get("DISPLAY"), "需要显示环境（可用 xvfb-run）")
+class NoMissingHandlersTest(unittest.TestCase):
+    """界面里每一个 `self.xxx()` 调用都必须在实例上真实存在。
+
+    回归背景：`self._open(...)` / `self._copy(...)` 被调用但方法压根没定义，
+    双击与右键菜单因此"点了毫无反应"（异常被 GTK 吞掉）。
+    这里用静态扫描 + 真实实例双重验证，把这一类问题一次挡死。
+    """
+
+    def _called_attrs(self, tree, cls):
+        """取出某个类里所有 self.xxx() 的 xxx。"""
+        import ast
+        names = set()
+        for node in ast.walk(cls):
+            if isinstance(node, ast.Call) \
+                    and isinstance(node.func, ast.Attribute) \
+                    and isinstance(node.func.value, ast.Name) \
+                    and node.func.value.id == "self":
+                names.add(node.func.attr)
+        return names
+
+    def test_every_self_call_exists(self):
+        import ast
+        from docseek.ui import window as window_module
+        from docseek.ui.window import MainWindow
+        source = window_module.__file__
+        with open(source, "r", encoding="utf-8") as handle:
+            tree = ast.parse(handle.read(), source)
+
+        classes = [node for node in tree.body if isinstance(node, ast.ClassDef)]
+        self.assertTrue(classes, "没扫到任何类，检查一下实现")
+
+        parent = MainWindow(db_path=os.path.join(
+            os.environ.get("TMPDIR", "/tmp"), "handlers-%d.db" % os.getpid()))
+        instances = {}
+        dialog = None
+        try:
+            instances["MainWindow"] = parent
+            dialog = window_module.SettingsDialog(parent, {"roots": ["/tmp"]})
+            instances["SettingsDialog"] = dialog
+            for cls in classes:
+                called = self._called_attrs(tree, cls)
+                instance = instances.get(cls.name)
+                if instance is None:
+                    continue          # 其它辅助类不在这里实例化
+                missing = sorted(name for name in called
+                                 if not hasattr(instance, name))
+                self.assertEqual(
+                    missing, [],
+                    "%s 调用了不存在的方法，点了会毫无反应：%s"
+                    % (cls.name, missing))
+        finally:
+            if dialog is not None:
+                dialog.destroy()
+            parent.destroy()
