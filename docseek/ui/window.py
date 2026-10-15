@@ -7,6 +7,7 @@
 """
 
 import os
+import shutil
 import subprocess
 import threading
 import time
@@ -14,7 +15,7 @@ import time
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import GLib, Gtk, Pango        # noqa: E402
+from gi.repository import Gio, GLib, Gtk, Pango  # noqa: E402
 
 from .. import (config, history, preview, procs, textstore,   # noqa: E402
                 tokenizer)
@@ -34,6 +35,11 @@ except (ValueError, ImportError):                 # pragma: no cover
 
 TEXT_PREVIEW_LIMIT = 1500000      # 全文视图最多装载的字符数
 RESULT_ROW_LIMIT = 800            # 列表最多渲染多少行（避免一次塞几万行）
+
+
+def _launch_uri(uri):
+    """交给系统默认程序打开（单独抽出来，测试时可替换，避免真的弹出窗口）。"""
+    return Gio.AppInfo.launch_default_for_uri(uri, None)
 
 
 class MainWindow(Gtk.Window):
@@ -797,23 +803,109 @@ class MainWindow(Gtk.Window):
         return self.results_view.selected_result()
 
     def on_result_activated(self, res):
+        """双击/回车：用系统默认程序打开这个文件。"""
         if res:
-            self._open(res.path)
+            self._run_action("打开文件", lambda: self._open(res.path))
 
     def on_result_context_menu(self, res, event):
         if not res:
             return False
+        entries = (
+            ("打开文件", lambda: self._open(res.path)),
+            ("在文件管理器中显示", lambda: self._reveal(res.path)),
+            ("打开所在目录", lambda: self._open(os.path.dirname(res.path))),
+            ("复制路径", lambda: self._copy(res.path)),
+            ("复制文件名", lambda: self._copy(res.name)),
+            ("重新加载预览", lambda: self.on_result_selected(res)),
+        )
         menu = Gtk.Menu()
-        for label, callback in (
-                ("打开文件", lambda *_: self._open(res.path)),
-                ("打开所在目录", lambda *_: self._open(os.path.dirname(res.path))),
-                ("复制路径", lambda *_: self._copy(res.path)),
-                ("重新加载预览", lambda *_: self.on_result_selected(res))):
+        for label, action in entries:
             entry = Gtk.MenuItem(label=label)
-            entry.connect("activate", callback)
+            # 注意：信号会先塞一个 menu item 参数，所以用 lambda 固定住 label/action，
+            # 否则 _run_action 收到的"动作"其实是标签字符串（这个坑刚踩过）
+            entry.connect("activate",
+                          lambda _item, l=label, a=action: self._run_action(l, a))
             menu.append(entry)
         menu.show_all()
         menu.popup_at_pointer(event)
+        return True
+
+    # ---------------------------------------------------------- 打开 / 复制
+
+    def _run_action(self, label, action, *_args):
+        """界面动作的统一护栏：出错就写进状态栏。
+
+        以前这些回调直接调用（早已被删掉的）方法，一抛异常就被 GTK 吞进 stderr，
+        界面上表现为"右键菜单点了毫无反应"，极难排查。
+        """
+        try:
+            action()
+        except Exception as exc:                     # noqa: BLE001
+            self.status_label.set_text("「%s」失败：%s: %s"
+                                       % (label, type(exc).__name__, exc))
+            return False
+        return True
+
+    def _open(self, path):
+        """用系统默认程序打开文件；传目录就是在文件管理器里打开该目录。"""
+        path = os.path.expanduser(str(path or ""))
+        if not path:
+            self.status_label.set_text("没有可打开的路径")
+            return False
+        if not os.path.exists(path):
+            self.status_label.set_text("文件不存在（可能已移动或删除）：%s" % path)
+            return False
+        uri = GLib.filename_to_uri(path, None)
+        try:
+            if _launch_uri(uri):
+                self.status_label.set_text("已打开：%s" % os.path.basename(path) or path)
+                return True
+        except GLib.Error:
+            pass
+        # 兜底：xdg-open / gio open（走 procs 登记，退出时会被清理）
+        for opener in ("xdg-open", "gio"):
+            binary = shutil.which(opener)
+            if not binary:
+                continue
+            try:
+                cmd = [binary, path] if opener == "xdg-open" else [binary, "open", path]
+                procs.Popen(cmd, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)
+                self.status_label.set_text("已交给 %s 打开：%s"
+                                           % (opener, os.path.basename(path)))
+                return True
+            except OSError:
+                continue
+        self.status_label.set_text("打不开（系统没有可用的默认程序）：%s" % path)
+        return False
+
+    def _reveal(self, path):
+        """在文件管理器里定位文件（D-Bus ShowItems），不行就退化成打开所在目录。"""
+        path = os.path.expanduser(str(path or ""))
+        if not path or not os.path.exists(path):
+            return self._open(os.path.dirname(path)) if path else False
+        try:
+            bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+            proxy = Gio.DBusProxy.new_sync(
+                bus, Gio.DBusProxyFlags.NONE, None,
+                "org.freedesktop.FileManager1", "/org/freedesktop/FileManager1",
+                "org.freedesktop.FileManager1", None)
+            proxy.call_sync("ShowItems",
+                            GLib.Variant("(ass)", ([GLib.filename_to_uri(path, None)], "")),
+                            Gio.DBusCallFlags.NONE, 3000, None)
+            self.status_label.set_text("已在文件管理器中定位：%s" % os.path.basename(path))
+            return True
+        except GLib.Error:
+            return self._open(os.path.dirname(path))
+
+    def _copy(self, text):
+        """复制到剪贴板。"""
+        from gi.repository import Gdk
+        text = "" if text is None else str(text)
+        clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+        clipboard.set_text(text, -1)
+        clipboard.store()
+        self.status_label.set_text("已复制：%s" % text)
         return True
 
     def on_toggle_preview(self, *_args):

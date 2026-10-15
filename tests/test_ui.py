@@ -7,6 +7,7 @@
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -19,6 +20,27 @@ except (ImportError, ValueError):        # pragma: no cover
     HAVE_GTK = False
 
 from docseek.search import Result, parse_query     # noqa: E402
+
+
+_launch_patch = None
+
+
+def setUpModule():
+    """所有 UI 测试一律不许真的启动外部程序。
+
+    否则测试里"双击打开"会真的调起文本编辑器（本机是 pluma），既慢又会在
+    xvfb 退出时报 X 连接错误。
+    """
+    global _launch_patch
+    import docseek.ui.window as window_module
+    _launch_patch = mock.patch.object(window_module, "_launch_uri",
+                                      return_value=True)
+    _launch_patch.start()
+
+
+def tearDownModule():
+    if _launch_patch is not None:
+        _launch_patch.stop()
 
 
 def tag_ranges(buffer, name):
@@ -451,3 +473,91 @@ class HistoryDropdownTest(unittest.TestCase):
         labels = "\n".join(collect_labels(self.window.history_box))
         self.assertIn("还没有搜索记录", labels)
         self.window.history_button.set_active(False)
+
+
+@unittest.skipUnless(HAVE_GTK, "需要 GTK3 与 PyGObject")
+@unittest.skipUnless(os.environ.get("DISPLAY"), "需要显示环境（可用 xvfb-run）")
+class ResultActionsTest(unittest.TestCase):
+    """结果行的动作必须真的有效：双击打开、右键菜单六项。
+
+    回归背景：`_open` / `_copy` 只有调用没有定义，双击和右键菜单点了**毫无反应**
+    （异常被 GTK 吞进 stderr，界面上看不到任何提示）。这里既验证"动作能跑"，
+    也验证"出错会显示在状态栏"。
+    """
+
+    def setUp(self):
+        from unittest import mock                        # noqa: F401
+        from docseek.ui.window import MainWindow
+        self.tmp = os.path.join(
+            os.environ.get("TMPDIR", "/tmp"), "docseek-actions-%d" % os.getpid())
+        os.makedirs(self.tmp, exist_ok=True)
+        self.path = os.path.join(self.tmp, "被打开的文件.txt")
+        with open(self.path, "w", encoding="utf-8") as handle:
+            handle.write("内容\n")
+        self.window = MainWindow(db_path=os.path.join(self.tmp, "actions.db"))
+        self.result = Result(doc_id=1, path=self.path, name="被打开的文件.txt",
+                             ext="txt", size=6, mtime=0.0)
+
+    def tearDown(self):
+        self.window.destroy()
+
+    def _patch_launch(self):
+        from unittest import mock
+        import docseek.ui.window as window_module
+        # 别真的去启动系统程序（否则会在桌面上弹出窗口）
+        return mock.patch.object(window_module, "_launch_uri", return_value=True)
+
+    def test_all_result_actions_exist(self):
+        """菜单和双击用到的每个方法都必须存在（少一个就是"点了没反应"）。"""
+        for name in ("_open", "_reveal", "_copy", "_run_action",
+                     "on_result_activated", "on_result_context_menu"):
+            self.assertTrue(callable(getattr(self.window, name, None)),
+                            "界面缺少方法 %s" % name)
+
+    def test_activate_opens_file(self):
+        with self._patch_launch() as launch:
+            self.window.on_result_activated(self.result)
+        self.assertTrue(launch.called, "双击应当去启动默认程序")
+        self.assertIn("已打开", self.window.status_label.get_text())
+
+    def test_open_missing_file_reports_instead_of_crashing(self):
+        self.assertFalse(self.window._open(os.path.join(self.tmp, "没有这个文件")))
+        self.assertIn("文件不存在", self.window.status_label.get_text())
+
+    def test_copy_puts_text_on_clipboard(self):
+        from gi.repository import Gdk, Gtk
+        self.assertTrue(self.window._copy("/tmp/某个路径.txt"))
+        self.assertIn("已复制", self.window.status_label.get_text())
+        clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+        self.assertEqual(clipboard.wait_for_text(), "/tmp/某个路径.txt")
+
+    def test_context_menu_items_all_work(self):
+        """六个菜单项逐个触发：不能抛异常，且状态栏要给出反馈。"""
+        from unittest import mock
+        menus = []
+        with mock.patch.object(Gtk.Menu, "popup_at_pointer",
+                               lambda self, event: menus.append(self)), \
+                self._patch_launch():
+            self.assertTrue(self.window.on_result_context_menu(self.result, None))
+        menu = menus[0]
+        items = [child for child in menu.get_children()
+                 if isinstance(child, Gtk.MenuItem)]
+        labels = [item.get_label() for item in items]
+        self.assertEqual(labels, ["打开文件", "在文件管理器中显示", "打开所在目录",
+                                  "复制路径", "复制文件名", "重新加载预览"])
+        for item in items:
+            self.window.status_label.set_text("")
+            item.activate()                     # 出错会被护栏写进状态栏
+            text = self.window.status_label.get_text()
+            self.assertTrue(text, "菜单项「%s」没有任何反馈" % item.get_label())
+            self.assertNotIn("失败：", text,
+                             "菜单项「%s」出错：%s" % (item.get_label(), text))
+
+    def test_failing_action_is_reported_not_swallowed(self):
+        """护栏：动作内部抛异常时必须显示在状态栏（而不是静默无反应）。"""
+        def boom():
+            raise RuntimeError("故意炸一个")
+        self.assertFalse(self.window._run_action("测试动作", boom))
+        text = self.window.status_label.get_text()
+        self.assertIn("测试动作", text)
+        self.assertIn("故意炸一个", text)
