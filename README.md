@@ -3,7 +3,7 @@
 ### 方式一：deb 包（推荐）
 
 ```bash
-sudo dpkg -i docseek_0.1.0_all.deb     # 装到 /opt/docseek，命令 docseek，菜单里有 DocSeek
+sudo dpkg -i docseek_*_all.deb         # 装到 /opt/docseek，命令 docseek，菜单里有 DocSeek
 ```
 
 包里的依赖已声明：`python3-gi`、`gir1.2-gtk-3.0`、`poppler-utils` 必装；
