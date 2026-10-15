@@ -1,0 +1,8 @@
+#!/bin/sh
+# DocSeek 启动脚本：解析软链后把项目根目录加进 PYTHONPATH，再调用模块入口。
+# （会被安装成 ~/.local/bin/docseek 与 /usr/local/bin/docseek，都要能定位源码）
+set -e
+SELF=$(readlink -f "$0")
+DIR=$(cd "$(dirname "$SELF")/.." && pwd)
+export PYTHONPATH="$DIR${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -m docseek.cli "$@"

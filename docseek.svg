@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2f7bd6"/>
+      <stop offset="1" stop-color="#1b4f96"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#dce9fb" stop-opacity="0.9"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 底板 -->
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="url(#bg)"/>
+
+  <!-- 文档 -->
+  <g transform="translate(52,44)">
+    <path d="M0 10 A10 10 0 0 1 10-10 L78-10 L114 26 L114 138 A10 10 0 0 1 104 148 L10 148 A10 10 0 0 1 0 138 Z"
+          fill="url(#glass)"/>
+    <path d="M78-10 L114 26 L84 26 A6 6 0 0 1 78 20 Z" fill="#b9d2f0"/>
+    <g fill="#3f6ea8">
+      <rect x="20" y="30" width="64" height="9" rx="4.5"/>
+      <rect x="20" y="54" width="74" height="9" rx="4.5"/>
+      <rect x="20" y="78" width="52" height="9" rx="4.5"/>
+      <rect x="20" y="102" width="66" height="9" rx="4.5"/>
+    </g>
+  </g>
+
+  <!-- 放大镜 -->
+  <g transform="translate(150,142)">
+    <circle cx="0" cy="0" r="46" fill="#ffffff" fill-opacity="0.18"
+            stroke="#ffffff" stroke-width="14"/>
+    <circle cx="0" cy="0" r="46" fill="none" stroke="#183f78" stroke-width="6"/>
+    <line x1="32" y1="32" x2="66" y2="66" stroke="#183f78" stroke-width="16"
+          stroke-linecap="round"/>
+  </g>
+
+  <!-- 命中高亮 -->
+  <rect x="76" y="96" width="46" height="13" rx="6.5" fill="#ffd43b" opacity="0.95"/>
+</svg>

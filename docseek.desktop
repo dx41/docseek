@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=DocSeek
+Name[zh_CN]=DocSeek 文档内容搜索
+GenericName=Document content search
+GenericName[zh_CN]=文档内容搜索
+Comment=Search inside documents: Chinese bigram index, match snippets, layout preview
+Comment[zh_CN]=搜文档正文：中文分词索引、命中片段、版面还原预览
+Exec=docseek gui
+Icon=docseek
+Terminal=false
+StartupNotify=true
+Categories=Office;GTK;
+Keywords=search;find;document;text;全文;搜索;文档;
