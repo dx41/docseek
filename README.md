@@ -1,11 +1,25 @@
-# DocSeek —— 本地文档内容搜索（银河麒麟 / GTK3）
+## 安装
 
-自研的本地全文搜索工具：**搜文件正文**（不只是文件名），结果列表直接显示**命中片段**，
-右侧可看**全文高亮**与**版面还原图**。中文按 2-gram 切分，无需联网。
+### 方式一：deb 包（推荐）
 
-> 为什么自研：Anytxt / TextSeek 的"匹配内容查阅"要使用码或付费，而它们底层的格式解析
-> 本来就是开源件拼的（TextSeek 自带 libpython2.7 + PyQt4 + xpdf4）。本项目按公开格式规范
-> 与开源库独立实现，**不使用它们的任何代码、资源、私有索引格式或授权机制**。
+```bash
+sudo dpkg -i docseek_0.1.0_all.deb     # 装到 /opt/docseek，命令 docseek，菜单里有 DocSeek
+```
+
+包里的依赖已声明：`python3-gi`、`gir1.2-gtk-3.0`、`poppler-utils` 必装；
+`tesseract-ocr`（含中文包）、`python3-pil`、`catdoc`、`libwps-tools`、LibreOffice 是推荐项
+（缺了对应格式就抽不出正文，但程序照常运行）。缺依赖时：`sudo apt-get -f install`。
+
+### 方式二：源码安装（装到家目录，不需要 root）
+
+```bash
+git clone https://github.com/dx41/docseek.git && cd docseek
+./install.sh          # 装到 ~/.local/bin，生成桌面菜单项
+```
+
+**包内不含任何索引数据**：索引与缓存在首次运行时于
+`~/.local/share/docseek/`（索引库）和 `~/.cache/docseek/`（OCR/渲染缓存）下自行生成，
+卸载（`./uninstall.sh` 或 `sudo dpkg -r docseek`）不会带走这些数据。
 
 ## 快速开始
 
