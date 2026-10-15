@@ -5,6 +5,8 @@
 """
 
 import os
+import shutil
+import subprocess
 import sys
 import unittest
 from unittest import mock
@@ -23,6 +25,7 @@ from docseek.search import Result, parse_query     # noqa: E402
 
 
 _launch_patch = None
+_reveal_patch = None
 
 
 def setUpModule():
@@ -30,17 +33,25 @@ def setUpModule():
 
     否则测试里"双击打开"会真的调起文本编辑器（本机是 pluma），既慢又会在
     xvfb 退出时报 X 连接错误。
+
+    同时必须挡住"在文件管理器中显示"这条 **D-Bus 路径**：它走会话总线，会把真实
+    桌面上的文件管理器（本机 peony）激活并弹窗——xvfb 拦不住，用户看到的现象就是
+    "跑测试时桌面上冒出一堆文件夹窗口，测试完也没人关"。
     """
-    global _launch_patch
+    global _launch_patch, _reveal_patch
     import docseek.ui.window as window_module
     _launch_patch = mock.patch.object(window_module, "_launch_uri",
                                       return_value=True)
     _launch_patch.start()
+    _reveal_patch = mock.patch.object(window_module, "_reveal_in_manager",
+                                      return_value=None)
+    _reveal_patch.start()
 
 
 def tearDownModule():
-    if _launch_patch is not None:
-        _launch_patch.stop()
+    for patch in (_reveal_patch, _launch_patch):
+        if patch is not None:
+            patch.stop()
 
 
 def tag_ranges(buffer, name):
@@ -63,6 +74,35 @@ def tag_ranges(buffer, name):
 
 @unittest.skipUnless(HAVE_GTK, "需要 GTK3 与 PyGObject")
 @unittest.skipUnless(os.environ.get("DISPLAY"), "需要显示环境（可用 xvfb-run）")
+def _remove_files(*paths):
+    """删掉文件及其 SQLite 兄弟（-wal/-shm）；清理用，不存在不算错。"""
+    for path in paths:
+        for candidate in (path, path + "-wal", path + "-shm"):
+            try:
+                os.unlink(candidate)
+            except OSError:
+                pass
+
+
+def _remove_tree(path):
+    """删掉测试自建的临时目录：本机约定不做物理删除，一律进回收站。
+
+    和 test_core.py 的 `_discard` 同一套路：`gio trash` 不在就留在原地，
+    绝不 `rm -rf`/`shutil.rmtree`。
+    """
+    path = str(path)
+    if not os.path.exists(path):
+        return
+    gio = shutil.which("gio")
+    if not gio:
+        return
+    try:
+        subprocess.run([gio, "trash", "--", path], timeout=30,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 class HighlightOffsetTest(unittest.TestCase):
     """回归：正文前面有【warning】提示时，高亮不能整体错位。
 
@@ -75,6 +115,7 @@ class HighlightOffsetTest(unittest.TestCase):
         self.tmp = os.path.join(
             os.environ.get("TMPDIR", "/tmp"), "docseek-ui-test-%d" % os.getpid())
         os.makedirs(self.tmp, exist_ok=True)
+        self.addCleanup(_remove_tree, self.tmp)
         self.window = MainWindow(db_path=os.path.join(self.tmp, "ui-test.db"))
         self.text = "前面有一段普通说明文字，人民代表大会在这里出现，后面还有别的。"
         self.result = Result(doc_id=1, path=os.path.join(self.tmp, "样例.doc"),
@@ -491,6 +532,7 @@ class ResultActionsTest(unittest.TestCase):
         self.tmp = os.path.join(
             os.environ.get("TMPDIR", "/tmp"), "docseek-actions-%d" % os.getpid())
         os.makedirs(self.tmp, exist_ok=True)
+        self.addCleanup(_remove_tree, self.tmp)
         self.path = os.path.join(self.tmp, "被打开的文件.txt")
         with open(self.path, "w", encoding="utf-8") as handle:
             handle.write("内容\n")
@@ -553,6 +595,33 @@ class ResultActionsTest(unittest.TestCase):
             self.assertNotIn("失败：", text,
                              "菜单项「%s」出错：%s" % (item.get_label(), text))
 
+    def test_reveal_does_not_touch_real_file_manager(self):
+        """「在文件管理器中显示」必须走可替换的模块级函数。
+
+        回归背景：它原来是内联的 D-Bus 调用（org.freedesktop.FileManager1），
+        测试里替换不掉，于是每次跑测试都会把真实桌面上的 peony 激活、弹出一个
+        文件夹窗口，而且没人去关。
+        """
+        import docseek.ui.window as window_module
+        self.assertTrue(os.path.exists(self.path))
+        with mock.patch.object(window_module, "_reveal_in_manager") as reveal, \
+                mock.patch.dict(os.environ):
+            # tests/run.sh 会设 DOCSEEK_NO_LAUNCH=1，这里要验证的是"没被禁止时"
+            # 走哪条出路，所以先把它摘掉（patch.dict 会在退出时还原）。
+            os.environ.pop("DOCSEEK_NO_LAUNCH", None)
+            self.assertTrue(self.window._reveal(self.path))
+        reveal.assert_called_once_with(self.path)
+        self.assertIn("已在文件管理器中定位", self.window.status_label.get_text())
+
+    def test_reveal_is_blocked_when_launching_is_disabled(self):
+        """DOCSEEK_NO_LAUNCH=1 时连 D-Bus 都不许碰（D-Bus 会弹真实窗口）。"""
+        import docseek.ui.window as window_module
+        with mock.patch.object(window_module, "_reveal_in_manager") as reveal, \
+                mock.patch.dict(os.environ, {"DOCSEEK_NO_LAUNCH": "1"}):
+            self.assertFalse(self.window._reveal(self.path))
+        self.assertFalse(reveal.called, "被禁止时不许调用文件管理器")
+        self.assertIn("已跳过外部打开", self.window.status_label.get_text())
+
     def test_failing_action_is_reported_not_swallowed(self):
         """护栏：动作内部抛异常时必须显示在状态栏（而不是静默无反应）。"""
         def boom():
@@ -596,8 +665,10 @@ class NoMissingHandlersTest(unittest.TestCase):
         classes = [node for node in tree.body if isinstance(node, ast.ClassDef)]
         self.assertTrue(classes, "没扫到任何类，检查一下实现")
 
-        parent = MainWindow(db_path=os.path.join(
-            os.environ.get("TMPDIR", "/tmp"), "handlers-%d.db" % os.getpid()))
+        handlers_db = os.path.join(
+            os.environ.get("TMPDIR", "/tmp"), "handlers-%d.db" % os.getpid())
+        self.addCleanup(_remove_files, handlers_db)
+        parent = MainWindow(db_path=handlers_db)
         instances = {}
         dialog = None
         try:
@@ -638,6 +709,7 @@ class PreviewStagingTest(unittest.TestCase):
         self.tmp = os.path.join(
             os.environ.get("TMPDIR", "/tmp"), "docseek-preview-%d" % os.getpid())
         os.makedirs(self.tmp, exist_ok=True)
+        self.addCleanup(_remove_tree, self.tmp)
         self.path = os.path.join(self.tmp, "预演.txt")
         self.body = "人民代表大会 在这里\n" * 5
         with open(self.path, "w", encoding="utf-8") as handle:

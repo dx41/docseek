@@ -38,8 +38,33 @@ RESULT_ROW_LIMIT = 800            # 列表最多渲染多少行（避免一次�
 
 
 def _launch_uri(uri):
-    """交给系统默认程序打开（单独抽出来，测试时可替换，避免真的弹出窗口）。"""
+    """交给系统默认程序打开（单独抽出来，测试时可替换，避免真的弹出窗口）。
+
+    注意：`launch_default_for_uri` 是走会话总线请桌面环境打开的，**即使程序跑在
+    xvfb 之类的虚拟显示上，窗口也会弹在用户的真实桌面上**。所以自动化场景（跑测试、
+    批处理、我自己验证）必须设 `DOCSEEK_NO_LAUNCH=1`，此时一律不启动外部程序。
+    """
+    if os.environ.get("DOCSEEK_NO_LAUNCH"):
+        return False
     return Gio.AppInfo.launch_default_for_uri(uri, None)
+
+
+def _reveal_in_manager(path):
+    """请系统文件管理器定位到 path（D-Bus org.freedesktop.FileManager1.ShowItems）。
+
+    和 `_launch_uri` 一样单独抽成模块级函数，一是测试里可以直接替换掉，二是要强调
+    **这条路径同样会弹出真实桌面上的窗口**：D-Bus 走的是会话总线，`new_sync` 在没有
+    FileManager1 服务时会把它**激活**（本机就是 peony），程序跑在 xvfb 里也没用——
+    用户看到的现象就是"跑测试时桌面上冒出一堆文件夹窗口，测试完也没人关"。
+    """
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    proxy = Gio.DBusProxy.new_sync(
+        bus, Gio.DBusProxyFlags.NONE, None,
+        "org.freedesktop.FileManager1", "/org/freedesktop/FileManager1",
+        "org.freedesktop.FileManager1", None)
+    proxy.call_sync("ShowItems",
+                    GLib.Variant("(ass)", ([GLib.filename_to_uri(path, None)], "")),
+                    Gio.DBusCallFlags.NONE, 3000, None)
 
 
 class MainWindow(Gtk.Window):
@@ -893,6 +918,9 @@ class MainWindow(Gtk.Window):
         except GLib.Error:
             pass
         # 兜底：xdg-open / gio open（走 procs 登记，退出时会被清理）
+        if os.environ.get("DOCSEEK_NO_LAUNCH"):
+            self.status_label.set_text("已跳过外部打开（DOCSEEK_NO_LAUNCH=1）")
+            return False
         for opener in ("xdg-open", "gio"):
             binary = shutil.which(opener)
             if not binary:
@@ -914,15 +942,14 @@ class MainWindow(Gtk.Window):
         path = os.path.expanduser(str(path or ""))
         if not path or not os.path.exists(path):
             return self._open(os.path.dirname(path)) if path else False
+        if os.environ.get("DOCSEEK_NO_LAUNCH"):
+            # 自动化场景（跑测试/我自己验证）不许把真实桌面上的文件管理器拉起来：
+            # D-Bus 会激活它并弹窗，xvfb 拦不住，用户看到的就是"测试时乱开文件夹"。
+            self.status_label.set_text("已跳过外部打开（DOCSEEK_NO_LAUNCH=1）：%s"
+                                       % os.path.basename(path))
+            return False
         try:
-            bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
-            proxy = Gio.DBusProxy.new_sync(
-                bus, Gio.DBusProxyFlags.NONE, None,
-                "org.freedesktop.FileManager1", "/org/freedesktop/FileManager1",
-                "org.freedesktop.FileManager1", None)
-            proxy.call_sync("ShowItems",
-                            GLib.Variant("(ass)", ([GLib.filename_to_uri(path, None)], "")),
-                            Gio.DBusCallFlags.NONE, 3000, None)
+            _reveal_in_manager(path)
             self.status_label.set_text("已在文件管理器中定位：%s" % os.path.basename(path))
             return True
         except GLib.Error:

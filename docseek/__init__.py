@@ -10,6 +10,6 @@
     ui          GTK3 界面
 """
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 APP_ID = "net.local.docseek"
 APP_NAME = "DocSeek"

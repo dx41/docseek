@@ -7,7 +7,14 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OUT=${1:-"$HOME/下载"}
 VERSION=$(python3 -c "import sys; sys.path.insert(0, '$ROOT'); import docseek; print(docseek.__version__)")
 PKG=docseek_${VERSION}_all
-STAGE=$(mktemp -d /tmp/docseek-deb-XXXXXX)
+STAGE=$(mktemp -d "${TMPDIR:-/tmp}/docseek-deb-XXXXXX")
+# 别在 /tmp 里留打包残留；本机纪律：删除一律 `gio trash`，不做物理删除。
+clean_stage() {
+    if command -v gio >/dev/null 2>&1; then
+        gio trash -- "$STAGE" 2>/dev/null || true
+    fi
+}
+trap clean_stage EXIT
 
 mkdir -p "$STAGE/DEBIAN" "$STAGE/opt/docseek" "$STAGE/usr/bin" \
          "$STAGE/usr/share/applications" \
