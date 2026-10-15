@@ -402,22 +402,33 @@ class MainWindow(Gtk.Window):
         self._show_text("正在读取正文……", reset=True)
 
         def work():
-            text = ""
-            error = None
-            # 优先用索引库里存的正文：省掉一次 LibreOffice/pdftotext 调用
-            # （.doc/.wps 一份要一两秒，点开结果时会明显卡顿）
-            idx = Index(self.db_path, readonly=True)
+            """分三拍：先显示正文，再显示版面图。
+
+            以前是"正文 + 转换 + 渲染"全干完才回主线程更新，于是一份 .doc 在索引
+            运行时要等 60 多秒，界面一直停在"正在读取正文……"，看着就像坏了。
+            """
+            text, error = "", None
+            # ① 优先用索引库里存的正文：毫秒级，绝大多数情况正文立刻就能显示
             try:
-                stored = idx.get_doc(res.path)
-                if (stored is not None and stored["size"] == res.size
-                        and stored["content"] is not None):
-                    text = textstore.unpack_content(stored["content"]) or ""
-                    error = stored["warning"] or None
+                idx = Index(self.db_path, readonly=True)
+                try:
+                    stored = idx.get_doc(res.path)
+                    if (stored is not None and stored["size"] == res.size
+                            and stored["content"] is not None):
+                        text = textstore.unpack_content(stored["content"]) or ""
+                        error = stored["warning"] or None
+                finally:
+                    idx.close()
             except Exception:                        # noqa: BLE001
                 text = ""
-            finally:
-                idx.close()
-            if not text:
+
+            if text:
+                GLib.idle_add(self._finish_text, token, res, text, error)
+            else:
+                # ② 库里没有正文：现抽（.doc/.wps 走 LibreOffice、扫描件走 OCR，都慢）
+                GLib.idle_add(self._preview_note, token,
+                              "正在抽取正文……（%s 需要转换，索引运行时可能较慢）"
+                              % (res.ext or "该格式"))
                 try:
                     got = extract(res.path, options=self.cfg)
                     text = got.text
@@ -427,6 +438,10 @@ class MainWindow(Gtk.Window):
                     error = str(exc)
                 except Exception as exc:             # noqa: BLE001
                     error = "%s: %s" % (type(exc).__name__, exc)
+                GLib.idle_add(self._finish_text, token, res, text, error)
+
+            # ③ 版面图最后做，不影响正文显示
+            GLib.idle_add(self._preview_note, token, "正在渲染版面……")
             png, page = None, None
             try:
                 png, page = preview.render_match(res.path, term)
@@ -437,10 +452,25 @@ class MainWindow(Gtk.Window):
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _finish_preview(self, token, res, text, error, png, page):
+    def _preview_note(self, token, text):
+        """更新状态栏提示（过期请求直接丢弃）。"""
+        if token != self._preview_token:
+            return False
+        self.status_label.set_text(text)
+        return False
+
+    def _finish_text(self, token, res, text, error):
+        """正文到齐就先显示，不等版面渲染。"""
         if token != self._preview_token:
             return False
         self._set_preview_text(res, text, error)
+        self.status_label.set_text("正文已显示：%s" % os.path.basename(res.path))
+        return False
+
+    def _finish_preview(self, token, res, text, error, png, page):
+        """版面图就绪（正文已经先显示过了，这里不再重复写入，免得又滚回顶部）。"""
+        if token != self._preview_token:
+            return False
         if png:
             try:
                 self.page_image.set_from_file(str(png))

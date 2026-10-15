@@ -249,7 +249,7 @@ def _flatten(text):
 # 对外接口
 # --------------------------------------------------------------------------
 
-def to_pdf(src, cache=True):
+def to_pdf(src, cache=True, profile=None):
     """把 src 转成 PDF 并返回路径；失败返回 None（异常不外抛）。
 
     * .pdf 直接返回自身；
@@ -282,7 +282,9 @@ def to_pdf(src, cache=True):
             pass
 
     try:
-        produced = lo.convert_to_pdf(src, timeout=TIMEOUT_CONVERT)
+        # 预览用独立 profile：否则索引批量转换时这里要排队（实测 1s → 69s）
+        produced = lo.convert_to_pdf(src, timeout=TIMEOUT_CONVERT,
+                                     profile=lo.PROFILE_DIR_PREVIEW)
     except ExtractError:
         return None
     except Exception:      # 兜底：LibreOffice 可能抛出任何东西，都不能影响 UI

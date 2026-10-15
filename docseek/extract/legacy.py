@@ -644,7 +644,9 @@ def _soffice_html(src, out_dir):
         "--outdir", str(out_dir),
         str(src),
     ]
-    with lo._LOCK:                                  # noqa: SLF001  与 lo.convert 互斥
+    # 与 lo.convert 用同一把锁（同一个 profile 不能并发跑 soffice）；
+    # 这把锁现在按 profile 区分，预览用的独立 profile 不会被索引堵住。
+    with lo._lock_for(lo.PROFILE_DIR):              # noqa: SLF001
         _code, _out, err = _run_soft(cmd, timeout=TIMEOUT)
     return err
 

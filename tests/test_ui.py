@@ -619,3 +619,104 @@ class NoMissingHandlersTest(unittest.TestCase):
             if dialog is not None:
                 dialog.destroy()
             parent.destroy()
+
+
+@unittest.skipUnless(HAVE_GTK, "需要 GTK3 与 PyGObject")
+@unittest.skipUnless(os.environ.get("DISPLAY"), "需要显示环境（可用 xvfb-run）")
+class PreviewStagingTest(unittest.TestCase):
+    """预览必须"正文先出来，版面图后出来"。
+
+    回归背景：以前要"读正文 + 转换 + 渲染"全做完才更新界面，索引运行时一份 .doc
+    的转换会排到 60 秒以上，界面就死死停在"正在读取正文……"，看着像坏了。
+    """
+
+    def setUp(self):
+        import docseek.ui.window as window_module
+        from docseek.ui.window import MainWindow
+        from docseek.index import Index
+        from docseek import textstore
+        self.tmp = os.path.join(
+            os.environ.get("TMPDIR", "/tmp"), "docseek-preview-%d" % os.getpid())
+        os.makedirs(self.tmp, exist_ok=True)
+        self.path = os.path.join(self.tmp, "预演.txt")
+        self.body = "人民代表大会 在这里\n" * 5
+        with open(self.path, "w", encoding="utf-8") as handle:
+            handle.write(self.body)
+        self.db = os.path.join(self.tmp, "preview.db")
+        index = Index(self.db)
+        index.upsert({"path": self.path, "name": "预演.txt", "ext": "txt",
+                      "kind": "text", "size": os.path.getsize(self.path),
+                      "mtime": os.stat(self.path).st_mtime, "chars": len(self.body)},
+                     tokens="预演 人民代表大会", state="ok",
+                     content=textstore.pack_content(self.body))
+        index.commit()
+        index.close()
+        self.window = MainWindow(db_path=self.db)
+        self.result = Result(doc_id=1, path=self.path, name="预演.txt", ext="txt",
+                             size=os.path.getsize(self.path), mtime=0.0)
+        self.window_module = window_module
+
+    def tearDown(self):
+        self.window.destroy()
+
+    def _text(self):
+        buffer = self.window.textbuffer
+        return buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), False)
+
+    def _pump_until(self, predicate, timeout):
+        import time as _time
+        end = _time.time() + timeout
+        while _time.time() < end:
+            while Gtk.events_pending():
+                Gtk.main_iteration_do(False)
+            if predicate():
+                return True
+            _time.sleep(0.02)
+        return False
+
+    def test_text_appears_without_waiting_for_page_render(self):
+        """版面渲染慢 2 秒时，正文也要立刻出现（来自库里存的正文）。"""
+        calls = {"render": 0}
+
+        def slow_render(path, needle, dpi=None):
+            calls["render"] += 1
+            import time as _time
+            _time.sleep(2.0)
+            return None, None
+
+        status_when_text_showed = {"text": None}
+        with mock.patch.object(self.window_module.preview, "render_match",
+                               side_effect=slow_render):
+            started = __import__("time").time()
+            self.window.on_result_selected(self.result)
+            appeared = self._pump_until(
+                lambda: "人民代表大会" in self._text()
+                and not status_when_text_showed.update(
+                    text=self.window.status_label.get_text()), timeout=1.0)
+            elapsed = __import__("time").time() - started
+        self.assertTrue(appeared, "正文没有在渲染完成前显示出来（用时 %.2fs）" % elapsed)
+        self.assertLess(elapsed, 1.0, "正文显示耗时 %.2fs，说明还在等渲染" % elapsed)
+        # 正文出现时状态栏必须已经离开"正在读取正文……"（那是卡住时的表现）
+        self.assertNotIn("正在读取正文", status_when_text_showed["text"] or "",
+                         "正文显示了但状态还停在读取中")
+
+    def test_page_label_reports_render_progress(self):
+        with mock.patch.object(self.window_module.preview, "render_match",
+                               return_value=(None, None)):
+            self.window.on_result_selected(self.result)
+            self._pump_until(
+                lambda: "预览完成" in self.window.status_label.get_text()
+                or "无法生成" in self.window.page_label.get_text(), timeout=5)
+        self.assertTrue(self.window.page_label.get_text(),
+                        "版面区域应当有状态说明，不能是空白")
+
+    def test_stale_preview_result_is_ignored(self):
+        """切到另一条结果后，旧请求回来的正文不能覆盖新预览。"""
+        with mock.patch.object(self.window_module.preview, "render_match",
+                               return_value=(None, None)):
+            self.window.on_result_selected(self.result)
+            self.window._preview_token += 1          # 模拟用户已经切走
+            self.assertFalse(self.window._finish_text(
+                self.window._preview_token - 1, self.result, "过期的正文", None))
+            self._pump_until(lambda: "人民代表大会" in self._text(), timeout=3)
+            self.assertNotIn("过期的正文", self._text())

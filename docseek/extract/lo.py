@@ -19,9 +19,27 @@ from .base import ExtractError, clean_text
 
 SOFFICE = shutil.which("soffice") or shutil.which("libreoffice")
 
+# LibreOffice 的 UserInstallation 目录。
+# **索引与预览必须用不同的 profile**：同一个 profile 下 LibreOffice 一次只处理一份
+# 文档，索引正在批量转换时，预览的转换会排队——实测一份 .doc 从 1 秒变成 69 秒，
+# 界面表现就是预览一直卡在"正在读取正文……"。
 PROFILE_DIR = config.CACHE_DIR / "loprofile"
+PROFILE_DIR_PREVIEW = config.CACHE_DIR / "loprofile-preview"
 
-_LOCK = threading.Lock()
+# **按 profile 分别加锁**：LibreOffice 同一 profile 不能并发，但不同 profile 可以。
+# 索引与预览用的是不同 profile，所以预览不会再被索引的批量转换堵住
+# （以前一把全局锁，索引在转大 .ppt 时预览要干等，界面卡在"正在读取正文……"）。
+_LOCKS = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+def _lock_for(profile):
+    key = str(profile or PROFILE_DIR)
+    with _LOCKS_GUARD:
+        lock = _LOCKS.get(key)
+        if lock is None:
+            lock = _LOCKS[key] = threading.Lock()
+        return lock
 
 # target -> LibreOffice 转换过滤器
 # 注意 "txt" 是 Writer 专用过滤器，表格类文档必然失败（0xc10），
@@ -46,7 +64,7 @@ def _env():
     return env
 
 
-def convert(src, target="txt", out_dir=None, timeout=180):
+def convert(src, target="txt", out_dir=None, timeout=180, profile=None):
     """把 src 转换成 target（txt/pdf/html），返回产物路径。
 
     找不到 soffice 时抛 ExtractError。
@@ -67,13 +85,13 @@ def convert(src, target="txt", out_dir=None, timeout=180):
 
     cmd = [
         SOFFICE, "--headless", "--norestore", "--nolockcheck", "--nodefault",
-        "-env:UserInstallation=file://%s" % PROFILE_DIR,
+        "-env:UserInstallation=file://%s" % (profile or PROFILE_DIR),
         "--convert-to", FILTERS[target],
         "--outdir", str(out_dir),
         str(src),
     ]
 
-    with _LOCK:
+    with _lock_for(profile):
         last = ""
         for attempt in (1, 2):
             try:
@@ -119,9 +137,9 @@ def convert_to_text(src, timeout=180, target="txt"):
     return clean_text(text, config.DEFAULTS["max_text_chars"])
 
 
-def convert_to_pdf(src, timeout=240):
+def convert_to_pdf(src, timeout=240, profile=None):
     """任意 LO 可打开的格式 → PDF，返回 PDF 路径（调用方负责缓存/清理）。"""
-    return convert(src, "pdf", timeout=timeout)
+    return convert(src, "pdf", timeout=timeout, profile=profile)
 
 
 def _decode(raw):

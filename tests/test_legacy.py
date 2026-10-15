@@ -715,3 +715,47 @@ class TestRealPresentations(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class LibreOfficeProfileTest(unittest.TestCase):
+    """索引与预览必须用不同的 LibreOffice profile（否则预览要排队几十秒）。"""
+
+    def test_preview_profile_is_separate_from_index_profile(self):
+        from docseek.extract import lo
+        self.assertNotEqual(lo.PROFILE_DIR, lo.PROFILE_DIR_PREVIEW,
+                            "预览与索引不能共用同一个 UserInstallation")
+
+    def test_lock_is_per_profile(self):
+        """不同 profile 不该共用一把锁（实测：共用时预览被索引堵到 69 秒）。"""
+        from docseek.extract import lo
+        index_lock = lo._lock_for(None)                 # 默认 = 索引用
+        preview_lock = lo._lock_for(lo.PROFILE_DIR_PREVIEW)
+        self.assertIsNot(index_lock, preview_lock)
+        self.assertIs(lo._lock_for(lo.PROFILE_DIR_PREVIEW), preview_lock,
+                      "同一 profile 必须复用同一把锁")
+
+    def test_convert_passes_profile_to_command(self):
+        import os as _os
+        import tempfile
+        from unittest import mock
+        from docseek.extract import lo
+        handle, sample = tempfile.mkstemp(suffix=".doc")
+        _os.close(handle)
+        self.addCleanup(_os.unlink, sample)
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return mock.Mock(returncode=0)
+
+        with mock.patch.object(lo, "SOFFICE", "/usr/bin/soffice"), \
+                mock.patch.object(lo.subprocess, "run", side_effect=fake_run), \
+                mock.patch.object(lo, "_find_output", return_value=None):
+            try:
+                lo.convert_to_pdf(sample, timeout=5,
+                                  profile=lo.PROFILE_DIR_PREVIEW)
+            except Exception:                       # noqa: BLE001 找不到产物属正常
+                pass
+        cmd = captured.get("cmd") or []
+        self.assertTrue(any("loprofile-preview" in str(part) for part in cmd),
+                        "转换命令里应带上预览专用 profile：%s" % cmd)
