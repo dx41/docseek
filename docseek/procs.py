@@ -95,9 +95,17 @@ def active():
         return list(_children.values())
 
 
-def terminate_all(grace=2.0):
-    """终止所有仍在运行的子进程，返回处理的数量。之后新起的子进程会被立即杀掉。"""
-    _shutting_down.set()
+def terminate_all(grace=2.0, sticky=True):
+    """终止所有仍在运行的子进程，返回处理的数量。
+
+    sticky=True（默认）：同时置位"正在退出"，之后新起的子进程会被立即杀掉——
+    这是真正的退出路径（atexit / 信号）要的行为，避免最后关头又蹦出孤儿。
+    sticky=False：只收当前这批，不动"正在退出"标志。**同一进程内反复调用 CLI
+    （测试、被别的主程序嵌入）必须用这个**，否则该进程此后起的每个子进程都会被
+    当成"退出竞态"直接 SIGKILL，表现为外部命令全部退出码 -9。
+    """
+    if sticky:
+        _shutting_down.set()
     with _lock:
         procs = list(_children.values())
         _children.clear()
@@ -115,6 +123,11 @@ def terminate_all(grace=2.0):
         if proc.poll() is None:
             _signal_group(proc, signal.SIGKILL)
     return len(alive)
+
+
+def release_shutdown():
+    """解除"正在退出"状态（仅供同进程内重复使用 CLI 的场景，如测试）。"""
+    _shutting_down.clear()
 
 
 def _signal_group(proc, sig):

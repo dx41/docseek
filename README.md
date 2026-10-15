@@ -3,12 +3,38 @@
 ### 方式一：deb 包（推荐）
 
 ```bash
-sudo dpkg -i docseek_*_all.deb         # 装到 /opt/docseek，命令 docseek，菜单里有 DocSeek
+sudo apt install ./docseek_*_all.deb    # ✅ 会自动把依赖一起装上（推荐）
+sudo dpkg -i docseek_*_all.deb          # ⚠️ 只检查依赖、不安装；缺了再 sudo apt-get -f install
 ```
 
-包里的依赖已声明：`python3-gi`、`gir1.2-gtk-3.0`、`poppler-utils` 必装；
-`tesseract-ocr`（含中文包）、`python3-pil`、`catdoc`、`libwps-tools`、LibreOffice 是推荐项
-（缺了对应格式就抽不出正文，但程序照常运行）。缺依赖时：`sudo apt-get -f install`。
+装完先做一次环境自检：
+
+```bash
+docseek doctor
+```
+
+它逐项列出依赖状态（哪些必需、哪些可选、缺了分别影响什么），并把**缺失项的安装命令**
+直接打印出来，例如：
+
+```
+  ✗ poppler-utils（pdftotext 等）   PDF 抽不出正文，也无法渲染版面预览
+  · tesseract OCR                   扫描件与图片无法识别文字
+
+必需依赖缺失 1 项，程序无法正常运行：
+  · poppler-utils（pdftotext 等） → 需要 poppler-utils
+
+一条命令补齐缺失项：
+    sudo apt install -y poppler-utils tesseract-ocr tesseract-ocr-chi-sim
+```
+
+图形界面里同样有：**索引设置 → 检查依赖**。
+
+依赖分两层：`Depends` 是必需的（`python3-gi`、`gir1.2-gtk-3.0`、`poppler-utils`），
+`Recommends` 是可选的（`tesseract-ocr` 及各语言包、`python3-pil`、`python3-xlrd`、
+`catdoc`、`libwps-tools`、LibreOffice）——缺了对应格式就抽不出正文，但程序照常运行。
+`apt install` 会连 Recommends 一起装，`dpkg -i` 两个都不装。
+
+自己打包：`./packaging/build-deb.sh [输出目录]`（版本号取自 `docseek/__init__.py`）。
 
 ### 方式二：源码安装（装到家目录，不需要 root）
 

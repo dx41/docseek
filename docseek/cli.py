@@ -18,7 +18,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import __version__, config, procs, textstore, tokenizer
+from . import __version__, config, doctor, procs, textstore, tokenizer
 from .index import Builder, Index
 from .search import SORT_LABELS, SORT_MODES, Searcher
 from .tokenizer import index_tokens
@@ -338,6 +338,25 @@ def cmd_reindex_tokens(args):
     return 0
 
 
+def cmd_doctor(args):
+    """检查运行依赖；缺失时给出可直接复制的安装命令。"""
+    import json as _json
+    results = doctor.run_checks()
+    if args.json:
+        print(_json.dumps({
+            "ok": not doctor.missing_required(results),
+            "checks": results,
+            "missing": doctor.missing_packages(results),
+            "command": doctor.apt_command(results),
+        }, ensure_ascii=False, indent=2))
+        return 0 if not doctor.missing_required(results) else 1
+    print("DocSeek 运行环境自检：")
+    print(doctor.format_report(results))
+    if not doctor.missing_required(results):
+        return 0
+    return 1
+
+
 def cmd_explain(args):
     """解释某份文档的索引状态，以及某个词为什么（不）能搜到它。"""
     import builtins
@@ -652,6 +671,10 @@ def build_parser():
     p_tok.add_argument("--quiet", action="store_true")
     p_tok.set_defaults(func=cmd_reindex_tokens)
 
+    p_doc = sub.add_parser("doctor", help="检查运行依赖，缺失时给出安装命令")
+    p_doc.add_argument("--json", action="store_true", help="输出 JSON")
+    p_doc.set_defaults(func=cmd_doctor)
+
     p_expl = sub.add_parser("explain", help="解释某份文档的索引状态与某词为何搜不到")
     p_expl.add_argument("pattern", help="文件路径的一部分")
     p_expl.add_argument("--term", default=None, help="要核对的词，多个用逗号分隔")
@@ -703,7 +726,9 @@ def main(argv=None):
         print("\n已中断", file=sys.stderr)
         return 130
     finally:
-        procs.terminate_all()
+        # sticky=False：命令收尾只收自己起的子进程。真正的进程退出由
+        # atexit / 信号处理器兜底（那两处用的是 sticky 默认值）。
+        procs.terminate_all(sticky=False)
 
 
 if __name__ == "__main__":

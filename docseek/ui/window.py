@@ -1111,6 +1111,8 @@ class SettingsDialog(Gtk.Dialog):
         Gtk.Dialog.__init__(self, title="索引设置", transient_for=parent,
                             modal=True)
         self.set_default_size(640, 460)
+        check_button = self.add_button("检查依赖", Gtk.ResponseType.NONE)
+        check_button.connect("clicked", self._on_check_deps)
         self.add_button("取消", Gtk.ResponseType.CANCEL)
         self.add_button("保存", Gtk.ResponseType.OK)
         self.cfg = dict(cfg)
@@ -1235,6 +1237,20 @@ class SettingsDialog(Gtk.Dialog):
         hint.set_line_wrap(True)
         box.add(hint)
         self.show_all()
+
+    def _on_check_deps(self, *_args):
+        """就地检查运行依赖：缺什么、影响什么、该敲哪条命令，一次说清。"""
+        from .. import doctor
+        results = doctor.run_checks()
+        dialog = Gtk.MessageDialog(
+            transient_for=self, modal=True, message_type=Gtk.MessageType.INFO,
+            buttons=Gtk.ButtonsType.OK,
+            text="运行依赖自检"
+            if not doctor.missing_required(results)
+            else "有必需依赖缺失，程序无法正常运行")
+        dialog.format_secondary_text(doctor.format_report(results))
+        dialog.run()
+        dialog.destroy()
 
     def _add_root(self, *_args):
         dialog = Gtk.FileChooserDialog(

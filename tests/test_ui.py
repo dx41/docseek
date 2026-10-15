@@ -720,3 +720,35 @@ class PreviewStagingTest(unittest.TestCase):
                 self.window._preview_token - 1, self.result, "过期的正文", None))
             self._pump_until(lambda: "人民代表大会" in self._text(), timeout=3)
             self.assertNotIn("过期的正文", self._text())
+
+
+class CheckDepsButtonTest(unittest.TestCase):
+    """设置对话框里的"检查依赖"按钮必须真能跑通（别再出现引用不存在的方法）。"""
+
+    def _dialog(self):
+        import docseek.ui.window as window_module
+        parent = window_module.Gtk.Window()
+        return window_module, window_module.SettingsDialog(parent, {"roots": []})
+
+    def test_button_exists_in_action_area(self):
+        module, dialog = self._dialog()
+        labels = []
+        for child in dialog.get_action_area().get_children():
+            if isinstance(child, module.Gtk.Button):
+                labels.append(child.get_label() or "")
+        self.assertIn("检查依赖", labels)
+
+    def test_handler_opens_report_without_crashing(self):
+        module, dialog = self._dialog()
+        captured = {}
+
+        def fake_run(self):
+            captured["text"] = self.get_property("text")
+            captured["secondary"] = self.get_property("secondary-text")
+            return module.Gtk.ResponseType.OK
+
+        with mock.patch.object(module.Gtk.MessageDialog, "run", fake_run), \
+                mock.patch.object(module.Gtk.MessageDialog, "destroy"):
+            dialog._on_check_deps()
+
+        self.assertIn("运行依赖自检", captured["text"] + captured["secondary"])
