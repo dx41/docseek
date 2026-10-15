@@ -17,6 +17,11 @@ from .. import config
 # 切词来源版本：1=只有正文；2=正文+文件名+路径。改动切词方式时 +1。
 TOKENS_VERSION = 2
 
+# 表结构版本：加表/加列时 +1。用它判断"要不要跑建表脚本"，
+# 而不是只看 docs 表在不在——老库可能只有 docs，缺 meta/fts，
+# 那种库跑检索会直接报 "no such table: meta"（踩过）。
+SCHEMA_VERSION = 2
+
 SCHEMA = """
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
@@ -72,19 +77,21 @@ class Index:
         if self.readonly:
             self.conn.execute("PRAGMA query_only=ON")
             return
-        if not self._has_schema():
+        if not self._schema_current():
+            # 新库、老库、缺表缺列的库都走这里：建表脚本是 IF NOT EXISTS，幂等
             self.conn.executescript(SCHEMA)
             self._migrate()
-            self.conn.commit()
-        else:
-            self._migrate()
+            self.set_meta("schema_version", str(SCHEMA_VERSION))
             self.conn.commit()
 
-    def _has_schema(self):
-        row = self.conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='docs'"
-        ).fetchone()
-        return row is not None
+    def _schema_current(self):
+        """结构是否已是最新版本（只有确信如此才跳过建表脚本）。"""
+        try:
+            row = self.conn.execute(
+                "SELECT v FROM meta WHERE k = 'schema_version'").fetchone()
+        except sqlite3.OperationalError:
+            return False                       # 连 meta 表都没有
+        return row is not None and row[0] == str(SCHEMA_VERSION)
 
     def _migrate(self):
         """老索引库补列：content / pages 是后加的，缺了就 ALTER 上去。"""
