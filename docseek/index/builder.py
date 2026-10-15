@@ -287,7 +287,7 @@ class Builder:
                 self._emit(current=path, message=err)
             else:
                 # 把"文件名 + 路径"一并切进索引：用户经常直接按文件名的词去搜
-                # （例如搜"选民登记联系函汇总"，而正文里只有"选民登记联系函"）。
+                # （例如文件名比正文里出现的词多一截，多一个"汇总"就搜不到了）。
                 # 正文本身仍单独存在 docs.content 里，预览不受影响。
                 head = "%s\n%s\n" % (os.path.basename(path), path)
                 tokens = tokenizer.index_tokens(head + result.text)

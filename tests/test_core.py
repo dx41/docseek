@@ -1140,16 +1140,16 @@ if __name__ == "__main__":
 class FilenameSearchTest(TempCase):
     """正文里没有的词，只要出现在**文件名或目录名**里也要能搜到。
 
-    实际案例：用户搜「选民登记联系函汇总」，而那份 PDF 的 OCR 正文里只有
-    「选民登记联系函」——按文件名搜就落空。现在文件名与路径也进索引。
+    实际案例：用户搜的是**完整文件名**（比正文里出现的词多一截，例如多一个"汇总"），
+    按正文搜就落空。现在文件名与路径也进索引。
     """
 
     def setUp(self):
         super().setUp()
-        folder = self.path("市县镇三级换届")
+        folder = self.path("归档资料")
         os.makedirs(folder, exist_ok=True)
         # 正文刻意不含任何检索词
-        self.target = os.path.join(folder, "选民登记联系函汇总.txt")
+        self.target = os.path.join(folder, "季度工作报告汇总.txt")
         with open(self.target, "w", encoding="utf-8") as handle:
             handle.write("会议纪要正文，很普通的一句话。\n")
         self.other = self.write_text("无关文件.txt", "另一份普通文件。\n")
@@ -1163,25 +1163,25 @@ class FilenameSearchTest(TempCase):
         return [r.name for r in results]
 
     def test_filename_words_are_searchable(self):
-        self.assertIn("选民登记联系函汇总.txt",
-                      self._names("选民登记联系函汇总"),
+        self.assertIn("季度工作报告汇总.txt",
+                      self._names("季度工作报告汇总"),
                       "整串文件名应当能搜到")
-        self.assertIn("选民登记联系函汇总.txt", self._names("联系函汇总"))
-        self.assertIn("选民登记联系函汇总.txt", self._names("选民登记"))
+        self.assertIn("季度工作报告汇总.txt", self._names("报告汇总"))
+        self.assertIn("季度工作报告汇总.txt", self._names("季度工作报告"))
 
     def test_directory_name_is_searchable(self):
-        self.assertIn("选民登记联系函汇总.txt", self._names("市县镇三级换届"),
+        self.assertIn("季度工作报告汇总.txt", self._names("归档资料"),
                       "目录名也应当能搜到")
 
     def test_unrelated_file_not_matched(self):
-        self.assertNotIn("无关文件.txt", self._names("选民登记联系函汇总"))
+        self.assertNotIn("无关文件.txt", self._names("季度工作报告汇总"))
 
     def test_no_matches_for_absent_term(self):
         self.assertEqual(self._names("完全不存在的词组zzz"), [])
 
     def test_name_hit_still_counts_and_has_no_bogus_snippet(self):
-        results, _query, _elapsed = self.searcher.search("选民登记联系函汇总")
-        hit = [r for r in results if r.name == "选民登记联系函汇总.txt"][0]
+        results, _query, _elapsed = self.searcher.search("季度工作报告汇总")
+        hit = [r for r in results if r.name == "季度工作报告汇总.txt"][0]
         self.assertGreaterEqual(hit.matches, 1, "名称命中也要计入命中数")
         # 正文里没有这个词，因此不该凭空造出正文片段
         source = extract(self.target).text
