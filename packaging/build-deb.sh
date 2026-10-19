@@ -36,6 +36,34 @@ sed -e 's|^Exec=.*|Exec=docseek gui|' "$ROOT/docseek.desktop" \
   > "$STAGE/usr/share/applications/docseek.desktop"
 cp "$ROOT/README.md" "$STAGE/usr/share/doc/docseek/README.md"
 
+# 权限归一（踩过的坑）：tar 会照抄源码树里的权限位，源码里若有 600 的文件，
+# 装到别人机器上就是「图标空白 + 点了没反应」——普通用户读不到 .py 文件，
+# import 直接被 EACCES 拦下；svg 读不到就是空白图标。这里统一收口。
+chmod 755 "$STAGE"            # mktemp -d 造出来是 700，包根目录也得让人进得去
+chmod -R a+rX "$STAGE/opt" "$STAGE/usr/share"
+chmod 755 "$STAGE/opt/docseek/bin/docseek" \
+          "$STAGE/opt/docseek/install.sh" \
+          "$STAGE/opt/docseek/uninstall.sh"
+chmod 644 "$STAGE/usr/share/applications/docseek.desktop" \
+          "$STAGE/usr/share/icons/hicolor/scalable/apps/docseek.svg"
+
+# 打包前断言：任何普通用户读不到的东西都不许进包
+bad=$(find "$STAGE" \( -type f -o -type d \) ! -perm -o=r -print)
+if [ -n "$bad" ]; then
+    echo "打包失败：以下文件普通用户读不到（换台机器会表现为图标空白/启动失败）——" >&2
+    printf '  %s\n' "$bad" >&2
+    exit 1
+fi
+dirbad=$(find "$STAGE" -type d ! -perm -o=x -print)
+if [ -n "$dirbad" ]; then
+    echo "打包失败：以下目录普通用户进不去——" >&2
+    printf '  %s\n' "$dirbad" >&2
+    exit 1
+fi
+test -x "$STAGE/opt/docseek/bin/docseek" || { echo "打包失败：启动器不可执行" >&2; exit 1; }
+test -r "$STAGE/usr/share/icons/hicolor/scalable/apps/docseek.svg" \
+    || { echo "打包失败：菜单图标缺失或不可读" >&2; exit 1; }
+
 cat > "$STAGE/DEBIAN/control" <<EOF
 Package: docseek
 Version: ${VERSION}-1
@@ -64,6 +92,12 @@ fi
 if [ -x /usr/bin/gtk-update-icon-cache ]; then
     gtk-update-icon-cache -f -t /usr/share/icons/hicolor >/dev/null 2>&1 || true
 fi
+
+# 防御性收口：万一本包里有文件的权限位不对，普通用户看到的就是「图标空白 + 点了没反应」
+chmod -R a+rX /opt/docseek 2>/dev/null || true
+chmod a+r /usr/share/icons/hicolor/scalable/apps/docseek.svg 2>/dev/null || true
+python3 -c "import sys; sys.path.insert(0, '/opt/docseek'); import docseek.ui.results" >/dev/null 2>&1 \
+    || echo "提示：DocSeek 模块自检失败，请到终端运行 docseek doctor 看原因。"
 
 # 缺的可选依赖：rp 装包只会装 Depends，Recommends 不一定跟着来
 missing=""

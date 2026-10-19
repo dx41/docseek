@@ -35,6 +35,18 @@ docseek doctor
 `apt install` 会连 Recommends 一起装，`dpkg -i` 两个都不装。
 
 自己打包：`./packaging/build-deb.sh [输出目录]`（版本号取自 `docseek/__init__.py`）。
+打包脚本会在生成 deb 前断言"所有文件普通用户都读得到、启动器可执行、图标存在"，不满足就直接失败。
+
+> **装完图标是空白、点了没反应？** 这是 0.1.3 之前的老包的一个打包 bug：源码里有几个文件
+> 权限是 `600`，被原样打进了包，普通用户读不到（`import docseek.ui.results` 直接被权限拦下，
+> 图标 svg 也读不到，所以是空白）。已经装过老包的机器不用卸，一条命令修好：
+>
+> ```bash
+> sudo chmod -R a+rX /opt/docseek && sudo chmod a+r /usr/share/icons/hicolor/scalable/apps/docseek.svg
+> sudo gtk-update-icon-cache -f -t /usr/share/icons/hicolor
+> ```
+>
+> 或者直接装 0.1.3 及以后的包（`postinst` 也会顺手把旧权限改回来）。
 
 ### 方式二：源码安装（装到家目录，不需要 root）
 
