@@ -61,6 +61,32 @@ CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
 """
 
 
+def probe_fts5():
+    """系统 SQLite 是否编译了 FTS5。返回 (是否可用, 说明)。
+
+    换台机器最容易翻车的点之一：某些发行版/自编译的 sqlite 没有 FTS5。
+    那种情况下建表会抛 "no such module: fts5"，堆栈一句英文，用户看不懂。
+    """
+    try:
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.execute("CREATE VIRTUAL TABLE __probe USING fts5(x)")
+        finally:
+            conn.close()
+        return True, ""
+    except sqlite3.Error as exc:
+        return False, "%s（sqlite %s）" % (exc, sqlite3.sqlite_version)
+
+
+FTS5_HELP = (
+    "系统的 SQLite 没有启用 FTS5 全文索引，DocSeek 无法建库。\n"
+    "  1) 先运行 docseek doctor 确认这一项；\n"
+    "  2) 麒麟/Ubuntu 下通常是升级 python3 自带的 sqlite3：\n"
+    "     sudo apt install --reinstall python3 libsqlite3-0\n"
+    "  3) 仍不行说明发行版把它裁掉了，需要换用带 FTS5 的 SQLite 编译版本。"
+)
+
+
 class Index:
     def __init__(self, path=None, readonly=False):
         """打开索引库。
@@ -79,7 +105,12 @@ class Index:
             return
         if not self._schema_current():
             # 新库、老库、缺表缺列的库都走这里：建表脚本是 IF NOT EXISTS，幂等
-            self.conn.executescript(SCHEMA)
+            try:
+                self.conn.executescript(SCHEMA)
+            except sqlite3.OperationalError as exc:
+                if "fts5" in str(exc).lower():
+                    raise RuntimeError(FTS5_HELP) from exc
+                raise
             self._migrate()
             self.set_meta("schema_version", str(SCHEMA_VERSION))
             self.conn.commit()

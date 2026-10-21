@@ -11,5 +11,8 @@ Exec=docseek gui
 Icon=docseek
 Terminal=false
 StartupNotify=true
-Categories=Office;GTK;
+# GTK 不是合法分类；菜单只在 Office/Utility 下才认。
+Categories=Office;Utility;
+# 让任务栏/开始菜单按 WM_CLASS 找到本程序的图标（cli.py 里设置了同名 prgname）。
+StartupWMClass=docseek
 Keywords=search;find;document;text;全文;搜索;文档;

@@ -76,19 +76,74 @@ class BuildScriptTest(unittest.TestCase):
         # 老机器上已经装了 600 权限的旧包时，重装能顺带修好
         self.assertRegex(self.text, r"chmod -R a\+rX /opt/docseek")
 
+    def test_installed_size_is_computed_not_hardcoded(self):
+        # dpkg 拿它判断磁盘够不够；写死一个错数字是在骗包管理器
+        self.assertIn("INSTALLED_KB=$(du -sk", self.text)
+        self.assertIn("Installed-Size: ${INSTALLED_KB}", self.text)
+
+    def test_depends_matches_dataclasses_requirement(self):
+        # 代码用了 dataclasses，那是 3.7 才有的；声明 3.6 会在老机器上直接 import 失败
+        self.assertIn("python3 (>= 3.7)", self.text)
+        self.assertNotIn("python3 (>= 3.6)", self.text)
+
+    def test_icons_include_pixmaps_and_bitmaps(self):
+        self.assertIn("usr/share/pixmaps/docseek.svg", self.text,
+                      "老式菜单只从 pixmaps 找图标")
+        self.assertIn("GdkPixbuf", self.text, "有渲染能力时要生成 PNG 图标")
+
+
+class DesktopEntryTest(unittest.TestCase):
+    """菜单项写不对，用户看到的就是"图标空白 + 找不到程序"。"""
+
+    def setUp(self):
+        self.path = os.path.join(ROOT, "docseek.desktop")
+        with open(self.path, encoding="utf-8") as fh:
+            self.text = fh.read()
+        self.keys = {}
+        for line in self.text.splitlines():
+            if "=" in line and not line.strip().startswith("#"):
+                key, _, value = line.partition("=")
+                self.keys[key.strip()] = value.strip()
+
+    def test_categories_are_valid(self):
+        cats = self.keys.get("Categories", "")
+        self.assertIn("Office;", cats)
+        self.assertNotIn("GTK", cats, "GTK 不是合法分类，菜单不会按它归类")
+
+    def test_startup_wmclass_matches_program_name(self):
+        # 任务栏靠 WM_CLASS 找图标；cli.py 里设置的就是 docseek
+        self.assertEqual(self.keys.get("StartupWMClass"), "docseek")
+
+    def test_exec_and_icon_present(self):
+        self.assertEqual(self.keys.get("Exec"), "docseek gui")
+        self.assertEqual(self.keys.get("Icon"), "docseek")
+        self.assertEqual(self.keys.get("Terminal"), "false")
+
+    def test_desktop_file_validates(self):
+        if not any(os.access(os.path.join(d, "desktop-file-validate"), os.X_OK)
+                   for d in os.environ.get("PATH", "/usr/bin").split(os.pathsep)):
+            self.skipTest("没有 desktop-file-validate")
+        result = subprocess.run(["desktop-file-validate", self.path],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
 
 class BuiltPackageTest(unittest.TestCase):
     """有现成 deb 就顺手体检一下；没有就跳过（CI/新克隆时允许）。"""
 
+    def _current_version(self):
+        with open(os.path.join(ROOT, "docseek", "__init__.py"),
+                  encoding="utf-8") as fh:
+            return re.search(r'__version__\s*=\s*"([^"]+)"', fh.read()).group(1)
+
     def _latest_deb(self):
+        """只挑当前版本构建出来的包；拿旧包体检等于自欺欺人。"""
+        want = "docseek_%s_all.deb" % self._current_version()
         for folder in (os.path.join(os.path.expanduser("~"), "下载"),
                        os.path.join(os.path.expanduser("~"), "Downloads")):
-            if not os.path.isdir(folder):
-                continue
-            debs = [os.path.join(folder, n) for n in os.listdir(folder)
-                    if re.match(r"^docseek_[\d.]+_all\.deb$", n)]
-            if debs:
-                return max(debs, key=os.path.getmtime)
+            path = os.path.join(folder, want)
+            if os.path.isfile(path):
+                return path
         return None
 
     def test_package_files_are_readable(self):
@@ -108,6 +163,64 @@ class BuiltPackageTest(unittest.TestCase):
                 bad.append("%s  %s" % (mode, parts[5]))
         self.assertEqual(bad, [], "包里这些文件普通用户读不到（%s）：\n%s"
                          % (deb, "\n".join(bad)))
+
+    def _extract(self, deb):
+        import tempfile
+        tmp = tempfile.mkdtemp(prefix="docseek-debtest-")
+        subprocess.check_call(["dpkg-deb", "-x", deb, tmp],
+                              stdout=subprocess.DEVNULL)
+        return tmp
+
+    def test_package_has_menu_icon_variants(self):
+        deb = self._latest_deb()
+        if not deb:
+            self.skipTest("没有现成的 deb")
+        listing = subprocess.check_output(["dpkg-deb", "-c", deb], text=True)
+        self.assertIn("hicolor/scalable/apps/docseek.svg", listing)
+        self.assertIn("usr/share/pixmaps/docseek.svg", listing)
+        self.assertRegex(listing, r"hicolor/\d+x\d+/apps/docseek\.png",
+                         "打包时应该用 SVG 渲染出位图图标")
+
+    def test_package_desktop_entry_has_wmclass(self):
+        deb = self._latest_deb()
+        if not deb:
+            self.skipTest("没有现成的 deb")
+        import tempfile
+        tmp = self._extract(deb)
+        self.addCleanup(_trash, tmp)
+        path = os.path.join(tmp, "usr/share/applications/docseek.desktop")
+        self.assertTrue(os.path.exists(path))
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("StartupWMClass=docseek", text)
+        self.assertIn("Exec=docseek gui", text)
+
+    def test_package_metadata_is_honest(self):
+        deb = self._latest_deb()
+        if not deb:
+            self.skipTest("没有现成的 deb")
+        info = subprocess.check_output(["dpkg-deb", "-f", deb], text=True)
+        self.assertIn("python3 (>= 3.7)", info)
+        size = int(re.search(r"Installed-Size: (\d+)", info).group(1))
+        tmp = self._extract(deb)
+        self.addCleanup(_trash, tmp)
+        real = sum(os.path.getsize(os.path.join(b, n))
+                   for b, _d, fs in os.walk(tmp) for n in fs) // 1024
+        # dpkg 以 KB 计块大小，允许 4 倍以内误差（块对齐、稀疏文件都可能）
+        self.assertGreater(size, 0)
+        self.assertLess(size, max(real, 1) * 4, "Installed-Size 比实际大太多")
+
+
+def _trash(path):
+    """测试产物按本仓库纪律走回收站，不做物理删除。"""
+    if not os.path.isdir(path):
+        return
+    if subprocess.call(["which", "gio"], stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL) == 0:
+        subprocess.call(["gio", "trash", "--", path])
+    else:
+        import shutil
+        shutil.rmtree(path, ignore_errors=True)
 
 
 if __name__ == "__main__":

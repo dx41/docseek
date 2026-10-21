@@ -59,6 +59,28 @@ git clone https://github.com/dx41/docseek.git && cd docseek
 `~/.local/share/docseek/`（索引库）和 `~/.cache/docseek/`（OCR/渲染缓存）下自行生成，
 卸载（`./uninstall.sh` 或 `sudo dpkg -r docseek`）不会带走这些数据。
 
+## 换台电脑装（0.1.4 起）
+
+从菜单启动时没有终端，出错时用户只会看到"点了没反应"。0.1.4 把这几件事补上了：
+
+- **启动自检**：启动脚本先查 SQLite 有没有 FTS5、数据目录能不能写；不通过就弹窗
+  说清楚缺什么（zenity/kdialog/xmessage，都带 30 秒超时，人不在也不会挂住）。
+- **出错不再静默**：任何未捕获异常都会写进 `~/.local/share/docseek/docseek.log`
+  （超过 512 KB 自动滚一份 `.log.1`），并弹窗提示日志位置。
+- **只许开一个界面**：同一份索引被两个窗口各跑一个索引线程会把 CPU 吃满，
+  第二个实例会提示"DocSeek 已经在运行了"后正常退出（退出码 0）。
+- **任务栏/菜单图标能对上**：设置 `WM_CLASS=docseek` 并给桌面项加
+  `StartupWMClass=docseek`（老版本会被识别成 `cli.py`，任务栏配不上图标）。
+- **图标有多尺寸位图**：打包时用 GdkPixbuf 从 SVG 渲染 48/64/128/256/512 的 PNG，
+  老式菜单从 `usr/share/pixmaps` 取图也有图；只有 SVG 的机器也不会空白。
+- **依赖声明据实**：`Depends: python3 (>= 3.7)`（代码用了 `dataclasses`），
+  `Installed-Size` 按实际体积算，分类改成合法的 `Office;Utility;`。
+- **没图形环境也能自检**：`docseek doctor` 在没有 DISPLAY 的服务器上不再打印
+  GTK 的 `Unable to init server` 噪声，只说明"界面不可用，命令行不受影响"。
+
+装到新机器后建议按这个顺序确认：`docseek --version` → `docseek doctor` →
+`docseek gui`（或菜单启动）→ 索引设置里加目录 → 点 ⟳。
+
 ## 快速开始
 
 ```bash

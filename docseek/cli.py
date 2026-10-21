@@ -13,13 +13,17 @@ import argparse
 import glob
 import json
 import os
+import shutil
 import signal
+import subprocess
 import sys
 import time
+import traceback
 from pathlib import Path
 
 from . import __version__, config, doctor, procs, textstore, tokenizer
 from .index import Builder, Index
+from .index.db import probe_fts5
 from .search import SORT_LABELS, SORT_MODES, Searcher
 from .tokenizer import index_tokens
 
@@ -594,13 +598,145 @@ def cmd_problems(args):
     return 0
 
 
+# ------------------------------------------- 启动期兜底（给别人装机时最关键）
+
+def _log_exception(context=""):
+    """把异常堆栈追加到 ~/.local/share/docseek/docseek.log。
+
+    装到别人机器上出问题时，用户说不清、我们也看不到他的终端；
+    留一个固定路径的日志，远程排障会快很多。
+    """
+    path = Path(config.DATA_DIR) / "docseek.log"
+    try:
+        config.ensure_dirs()
+        if path.exists() and path.stat().st_size > 512 * 1024:
+            os.replace(str(path), str(path.with_suffix(".log.1")))   # 只留一份
+        with open(str(path), "a", encoding="utf-8") as fh:
+            fh.write("=" * 70 + "\n%s %s\n%s\n" % (
+                time.strftime("%Y-%m-%d %H:%M:%S"), context,
+                traceback.format_exc()))
+        return path
+    except OSError:
+        return None
+
+
+def _show_error_dialog(message):
+    """没有终端时（从菜单启动）也要让用户看见错误，而不是"点了没反应"。"""
+    if os.environ.get("DOCSEEK_NO_DIALOG") or sys.stderr.isatty():
+        return False
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        return False
+    for name, argv in (
+            ("zenity", ["zenity", "--error", "--no-markup", "--timeout=30",
+                        "--title=DocSeek", "--text=" + message]),
+            ("kdialog", ["kdialog", "--title", "DocSeek", "--error", message,
+                         "--timeout", "30"]),
+            ("xmessage", ["xmessage", "-center", message])):
+        if not shutil.which(name):
+            continue
+        try:
+            subprocess.run(argv, timeout=600)      # 等用户点掉，别急着退
+            return True
+        except (OSError, subprocess.SubprocessError):
+            continue
+    return False
+
+
+def _set_window_class(name="docseek"):
+    """让窗口的 WM_CLASS 与 desktop 文件里的 StartupWMClass 对上。
+
+    `python3 -m docseek.cli gui` 启动时 WM_CLASS 默认是 "cli.py"/"Cli.py"，
+    任务栏与开始菜单于是配不到我们的图标，看着就像"图标没装好"（已踩过）。
+    """
+    try:
+        import gi
+        gi.require_version("Gdk", "3.0")
+        from gi.repository import Gdk, GLib
+        GLib.set_prgname(name)
+        Gdk.set_program_class(name)
+        return True
+    except Exception:                              # noqa: BLE001 取不到就算了
+        return False
+
+
+def _single_instance(db_path=None):
+    """同一个索引库只许开一个图形界面。
+
+    两个实例各起一个索引线程会把 CPU 吃满、还互相抢写锁。
+    返回 (是否获准启动, 锁文件对象或 None)；进程退出锁自动释放，不会留死锁。
+    """
+    import fcntl
+    base = Path(db_path) if db_path else Path(config.INDEX_DB)
+    lock_path = base.with_name(base.name + ".gui.lock")
+    try:
+        fh = open(str(lock_path), "a+")
+    except OSError:
+        return True, None                          # 连锁文件都建不了就别拦人
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fh.close()
+        return False, None
+    return True, fh
+
+
+def cmd_preflight(args):
+    """启动前自检（bin/docseek 先行调用）。
+
+    只查"换台机器最容易翻车"的几件事：SQLite 有没有 FTS5、数据目录能不能写。
+    失败原因打到 stderr，由启动脚本弹窗显示给用户。
+    """
+    problems = []
+    ok, detail = probe_fts5()
+    if not ok:
+        problems.append("SQLite 没有 FTS5 全文索引：%s" % detail)
+    try:
+        config.ensure_dirs()
+        probe = Path(config.DATA_DIR) / ".write-probe"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+    except OSError as exc:
+        problems.append("数据目录不可写（%s）：%s" % (config.DATA_DIR, exc))
+    if problems:
+        print("\n".join(problems), file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_gui(args):
     try:
         from .ui.app import main as gui_main
     except ImportError as exc:
-        print("界面模块尚未就绪：%s" % exc, file=sys.stderr)
+        message = ("界面模块加载失败：%s\n\n"
+                   "可在终端运行 docseek doctor 查看缺少什么。" % exc)
+        print(message, file=sys.stderr)
+        _log_exception("import docseek.ui.app")
+        _show_error_dialog(message)
         return 3
-    return gui_main(args.db)
+    _set_window_class()
+    allowed, lock = _single_instance(args.db)
+    if not allowed:
+        message = ("DocSeek 已经在运行了。\n\n"
+                   "同一份索引同时开两个实例会把 CPU 吃满，所以这次不再启动。\n"
+                   "请切换到已经打开的窗口。")
+        print(message, file=sys.stderr)
+        _show_error_dialog(message)
+        return 0
+    try:
+        return gui_main(args.db)
+    except Exception as exc:                       # noqa: BLE001 界面里未接住的错
+        path = _log_exception("gui")
+        message = ("DocSeek 运行时出错，界面已退出：\n%s\n\n"
+                   "详细日志：%s" % (exc, path))
+        print(message, file=sys.stderr)
+        _show_error_dialog(message)
+        return 4
+    finally:
+        if lock is not None:
+            try:
+                lock.close()                       # 释放文件锁
+            except OSError:
+                pass
 
 
 # ---------------------------------------------------------------- 入口
@@ -611,6 +747,9 @@ def build_parser():
     parser.add_argument("--version", action="version",
                         version="DocSeek %s" % __version__)
     parser.add_argument("--db", default=None, help="索引库路径（默认 ~/.local/share/docseek/index.db）")
+    # 隐藏开关：启动脚本先跑它做快速自检。用顶层选项而不是子命令，
+    # 因为 argparse 会把子命令名列在 --help 的 choices 里，藏不住。
+    parser.add_argument("--preflight", action="store_true", help=argparse.SUPPRESS)
     sub = parser.add_subparsers(dest="command")
 
     p_index = sub.add_parser("index", help="建立/更新索引")
@@ -708,12 +847,16 @@ def build_parser():
 
     p_gui = sub.add_parser("gui", help="启动图形界面")
     p_gui.set_defaults(func=cmd_gui)
+
     return parser
 
 
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
+    if getattr(args, "preflight", False):
+        procs.install()
+        return cmd_preflight(args)
     if not getattr(args, "command", None):
         parser.print_help()
         return 1
@@ -725,6 +868,16 @@ def main(argv=None):
     except KeyboardInterrupt:
         print("\n已中断", file=sys.stderr)
         return 130
+    except Exception as exc:                       # noqa: BLE001 兜底：别只吐半行堆栈
+        path = _log_exception(" ".join(argv if argv is not None else sys.argv[1:]))
+        print("出错了：%s" % exc, file=sys.stderr)
+        if path:
+            print("详细日志：%s" % path, file=sys.stderr)
+        if sys.stderr.isatty():
+            traceback.print_exc()
+        else:
+            _show_error_dialog("DocSeek 出错了：\n%s\n\n详细日志：%s" % (exc, path))
+        return 2
     finally:
         # sticky=False：命令收尾只收自己起的子进程。真正的进程退出由
         # atexit / 信号处理器兜底（那两处用的是 sticky 默认值）。

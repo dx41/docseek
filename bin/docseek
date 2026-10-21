@@ -1,8 +1,64 @@
 #!/bin/sh
-# DocSeek 启动脚本：解析软链后把项目根目录加进 PYTHONPATH，再调用模块入口。
-# （会被安装成 ~/.local/bin/docseek 与 /usr/local/bin/docseek，都要能定位源码）
-set -e
-SELF=$(readlink -f "$0")
-DIR=$(cd "$(dirname "$SELF")/.." && pwd)
+# DocSeek 启动脚本：定位自身 → 加 PYTHONPATH → 启动前自检 → 进入命令行入口。
+#
+# 为什么要有自检：从开始菜单启动时没有终端，任何 import 层面的错误
+# （依赖没装、文件权限不对、SQLite 没有 FTS5）用户都看不到，表现就是
+# "点了没反应"。所以这里先跑 `--preflight`，失败就弹窗说明原因。
+#
+# 会被安装成 /usr/bin/docseek（软链）与 ~/.local/bin/docseek，都要能定位源码。
+
+SELF=$0
+if command -v readlink >/dev/null 2>&1; then
+    SELF=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
+fi
+case $SELF in
+    /*) ;;
+    *)  SELF=$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$(basename "$0") ;;
+esac
+DIR=$(cd "$(dirname "$SELF")/.." 2>/dev/null && pwd)
+[ -n "$DIR" ] || DIR=$(dirname "$SELF")
 export PYTHONPATH="$DIR${PYTHONPATH:+:$PYTHONPATH}"
+
+die() {
+    printf '%s\n' "$1" >&2
+    # 终端里直接看 stderr 就够了；菜单启动才需要弹窗
+    if [ ! -t 2 ] && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+        for d in zenity kdialog xmessage; do
+            command -v "$d" >/dev/null 2>&1 || continue
+            # 都带超时：人不在电脑前时别把进程挂在那儿
+            case $d in
+                zenity)   zenity --error --timeout=30 --title=DocSeek --text="$1" >/dev/null 2>&1 && return 0 ;;
+                kdialog)  kdialog --title DocSeek --error "$1" --timeout 30 >/dev/null 2>&1 && return 0 ;;
+                xmessage) if command -v timeout >/dev/null 2>&1; then
+                              timeout 30 xmessage -center "$1" >/dev/null 2>&1 && return 0
+                          else
+                              xmessage -center "$1" >/dev/null 2>&1 && return 0
+                          fi ;;
+            esac
+        done
+    fi
+    return 0
+}
+
+if ! command -v python3 >/dev/null 2>&1; then
+    die "DocSeek 需要 python3，但系统里找不到。
+
+请先安装：sudo apt install python3"
+    exit 127
+fi
+
+if ! OUT=$(python3 -m docseek.cli --preflight 2>&1); then
+    die "DocSeek 启动自检没通过：
+
+$OUT
+
+可在终端运行 docseek doctor，看缺什么、该装哪个包。"
+    exit 1
+fi
+
+# 不带参数（终端里敲 docseek）就直接开界面，别甩一段帮助
+if [ $# -eq 0 ]; then
+    set -- gui
+fi
+
 exec python3 -m docseek.cli "$@"

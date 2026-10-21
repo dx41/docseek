@@ -8,6 +8,7 @@
 """
 
 import importlib
+import os
 import shutil
 import sqlite3
 
@@ -68,6 +69,13 @@ def _check(kind, target):
             return False, str(exc)[:60]
     if kind in ("gi", "gi_soft"):
         namespace, version = target
+        if namespace.startswith("Gtk") and not (os.environ.get("DISPLAY")
+                                                or os.environ.get("WAYLAND_DISPLAY")):
+            # 没有图形环境时别去 import Gtk：PyGObject 导入时会 gtk_init，
+            # 往 stderr 喷两行 "Unable to init server"，看着像自检坏了。
+            if namespace == "Gtk":
+                return True, "无图形环境，界面不可用；命令行不受影响"
+            return True, ""
         try:
             import gi
             gi.require_version(namespace, version)
@@ -142,7 +150,8 @@ def format_report(results=None):
         mark = "✓" if item["ok"] else ("✗" if item["required"] else "·")
         line = "  %s %-30s %s" % (mark, item["label"],
                                   "正常" if item["ok"] else item["impact"])
-        if not item["ok"] and item["detail"]:
+        if item["detail"]:
+            # 缺了要说原因，正常但有限制（比如没有图形环境）也要说
             line += "（%s）" % item["detail"]
         lines.append(line)
     broken = [r for r in results if not r["ok"]]

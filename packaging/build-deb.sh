@@ -19,6 +19,7 @@ trap clean_stage EXIT
 mkdir -p "$STAGE/DEBIAN" "$STAGE/opt/docseek" "$STAGE/usr/bin" \
          "$STAGE/usr/share/applications" \
          "$STAGE/usr/share/icons/hicolor/scalable/apps" \
+         "$STAGE/usr/share/pixmaps" \
          "$STAGE/usr/share/doc/docseek"
 
 # 只装运行需要的文件。索引库在 ~/.local/share/docseek 下，天然不会被打进来。
@@ -31,6 +32,28 @@ tar -C "$ROOT" --exclude='.git' --exclude='__pycache__' --exclude='*.pyc' \
 
 ln -s /opt/docseek/bin/docseek "$STAGE/usr/bin/docseek"
 cp "$ROOT/docseek.svg" "$STAGE/usr/share/icons/hicolor/scalable/apps/docseek.svg"
+# 老式菜单/任务栏只认 /usr/share/pixmaps
+cp "$ROOT/docseek.svg" "$STAGE/usr/share/pixmaps/docseek.svg"
+
+# 位图图标：有些任务栏和开始菜单不认 SVG（或只在 hicolor/<尺寸>x<尺寸> 里找），
+# 有 SVG 渲染能力就顺手生成一组；没有就只带 SVG，绝不因为渲染不了而打包失败。
+if python3 -c 'import gi; gi.require_version("GdkPixbuf","2.0"); from gi.repository import GdkPixbuf' 2>/dev/null; then
+    python3 - "$ROOT/docseek.svg" "$STAGE/usr/share/icons/hicolor" <<'PY' || echo "提示：PNG 图标渲染失败，本包只带 SVG" >&2
+import os
+import sys
+
+import gi
+gi.require_version("GdkPixbuf", "2.0")
+from gi.repository import GdkPixbuf
+
+src, base = sys.argv[1], sys.argv[2]
+for size in (48, 64, 128, 256, 512):
+    target = os.path.join(base, "%dx%d" % (size, size), "apps")
+    os.makedirs(target, exist_ok=True)
+    pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(src, size, size, True)
+    pixbuf.savev(os.path.join(target, "docseek.png"), "png", [], [])
+PY
+fi
 # 桌面项不写死路径（避免换台机器就失效）
 sed -e 's|^Exec=.*|Exec=docseek gui|' "$ROOT/docseek.desktop" \
   > "$STAGE/usr/share/applications/docseek.desktop"
@@ -63,6 +86,14 @@ fi
 test -x "$STAGE/opt/docseek/bin/docseek" || { echo "打包失败：启动器不可执行" >&2; exit 1; }
 test -r "$STAGE/usr/share/icons/hicolor/scalable/apps/docseek.svg" \
     || { echo "打包失败：菜单图标缺失或不可读" >&2; exit 1; }
+# 生成了 PNG 就必须真能读出来，否则不如只带 SVG
+badpng=$(find "$STAGE/usr/share/icons" -name '*.png' ! -size +0 | head -1)
+if [ -n "$badpng" ]; then
+    echo "打包失败：生成的 PNG 图标是空文件：$badpng" >&2
+    exit 1
+fi
+# 真实占盘（KB）：dpkg 用它判断磁盘够不够，写死一个数会让人误会
+INSTALLED_KB=$(du -sk --exclude=DEBIAN "$STAGE" | cut -f1)
 
 cat > "$STAGE/DEBIAN/control" <<EOF
 Package: docseek
@@ -71,9 +102,9 @@ Section: utils
 Priority: optional
 Architecture: all
 Maintainer: dx41 <dx41@users.noreply.github.com>
-Depends: python3 (>= 3.6), python3-gi, gir1.2-gtk-3.0, poppler-utils
+Depends: python3 (>= 3.7), python3-gi, gir1.2-gtk-3.0, poppler-utils
 Recommends: tesseract-ocr, tesseract-ocr-chi-sim, tesseract-ocr-chi-tra, tesseract-ocr-osd, python3-pil, python3-xlrd, gir1.2-gtksource-3.0, catdoc, libwps-tools, libreoffice-core | libreoffice-writer
-Installed-Size: 1024
+Installed-Size: ${INSTALLED_KB}
 Description: DocSeek -- local full-text search with match snippets and OCR
  Search inside documents (docx/xlsx/pptx/pdf/txt/code, plus legacy
  doc/xls/wps via LibreOffice/catdoc), Chinese bigram index on SQLite FTS5,
@@ -96,6 +127,8 @@ fi
 # 防御性收口：万一本包里有文件的权限位不对，普通用户看到的就是「图标空白 + 点了没反应」
 chmod -R a+rX /opt/docseek 2>/dev/null || true
 chmod a+r /usr/share/icons/hicolor/scalable/apps/docseek.svg 2>/dev/null || true
+chmod a+r /usr/share/pixmaps/docseek.svg 2>/dev/null || true
+find /usr/share/icons/hicolor -name 'docseek.png' -exec chmod a+r {} + 2>/dev/null || true
 python3 -c "import sys; sys.path.insert(0, '/opt/docseek'); import docseek.ui.results" >/dev/null 2>&1 \
     || echo "提示：DocSeek 模块自检失败，请到终端运行 docseek doctor 看原因。"
 
