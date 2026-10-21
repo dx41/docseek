@@ -178,3 +178,50 @@ def _remove(path):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VersionDisplayTest(unittest.TestCase):
+    """界面上显示的版本号必须跟着包走——0.1.4 发布时"关于"里还写死着 0.1.0，
+    用户装了新版一看"还是 0.1.0"，以为没装上。"""
+
+    def setUp(self):
+        from docseek import __version__
+        self.version = __version__
+        self.src_dir = os.path.join(ROOT, "docseek")
+
+    def _sources(self):
+        for base, dirs, files in os.walk(self.src_dir):
+            dirs[:] = [d for d in dirs if d != "__pycache__"]
+            for name in files:
+                if name.endswith(".py"):
+                    yield os.path.join(base, name)
+
+    def test_about_dialog_reads_the_package_version(self):
+        with open(os.path.join(self.src_dir, "ui", "window.py"),
+                  encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("set_version(__version__)", text)
+        self.assertNotRegex(text, r'set_version\("\d')
+
+    def test_no_module_hardcodes_a_version_literal(self):
+        import re
+        pattern = re.compile(r'"\d+\.\d+\.\d+"')
+        bad = []
+        for path in self._sources():
+            if path.endswith(os.path.join("docseek", "__init__.py")):
+                continue            # 唯一允许写版本号的地方
+            with open(path, encoding="utf-8") as fh:
+                for no, line in enumerate(fh, 1):
+                    if pattern.search(line) and "require_version" not in line:
+                        bad.append("%s:%d %s" % (os.path.relpath(path, ROOT),
+                                                 no, line.strip()))
+        self.assertEqual(bad, [], "这些地方把版本号写死了，升级后会跟界面/包对不上：\n"
+                         + "\n".join(bad))
+
+    def test_cli_version_matches_package(self):
+        result = subprocess.run(
+            [sys.executable, "-m", "docseek.cli", "--version"],
+            capture_output=True, text=True, cwd=ROOT,
+            env=dict(os.environ, PYTHONPATH=ROOT))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "DocSeek %s" % self.version)

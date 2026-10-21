@@ -48,6 +48,16 @@ docseek doctor
 >
 > 或者直接装 0.1.3 及以后的包（`postinst` 也会顺手把旧权限改回来）。
 
+> **从开始菜单"添加到桌面快捷方式"后，桌面图标是空白？** 0.1.5 之前菜单项用的是主题名
+> `Icon=docseek`。桌面（UKUI 的 peony-qt）在**登录时**就把图标索引缓存进内存了，如果你是在
+> 登录之后才装的包，它查不到这个新图标，快捷方式就是空白的（注销重进才会好）。0.1.5 起
+> 改成绝对路径 `Icon=/usr/share/icons/hicolor/256x256/apps/docseek.png`，直接按文件加载，
+> 不再依赖主题缓存。老快捷方式改一下这一行、或删掉重新添加即可：
+>
+> ```bash
+> sed -i 's#^Icon=.*#Icon=/usr/share/icons/hicolor/256x256/apps/docseek.png#' ~/桌面/docseek.desktop
+> ```
+
 ### 方式二：源码安装（装到家目录，不需要 root）
 
 ```bash

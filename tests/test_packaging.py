@@ -116,8 +116,15 @@ class DesktopEntryTest(unittest.TestCase):
 
     def test_exec_and_icon_present(self):
         self.assertEqual(self.keys.get("Exec"), "docseek gui")
-        self.assertEqual(self.keys.get("Icon"), "docseek")
         self.assertEqual(self.keys.get("Terminal"), "false")
+        # 图标要写包内真实存在的绝对路径：写成主题名 Icon=docseek 时，若包是在
+        # 登录之后才装的，桌面（peony-qt）的图标索引已经缓存过，"添加到桌面快捷
+        # 方式"会得到一个空白图标，直到注销重进。绝对路径由 QIcon/Gtk 直接按文
+        # 件加载，绕开主题缓存。
+        icon = self.keys.get("Icon", "")
+        self.assertTrue(icon.startswith("/"), "Icon 应为绝对路径，实际 %r" % icon)
+        self.assertIn("/usr/share/icons/hicolor/", icon)
+        self.assertTrue(icon.endswith("docseek.png"), icon)
 
     def test_desktop_file_validates(self):
         if not any(os.access(os.path.join(d, "desktop-file-validate"), os.X_OK)
@@ -194,6 +201,24 @@ class BuiltPackageTest(unittest.TestCase):
             text = fh.read()
         self.assertIn("StartupWMClass=docseek", text)
         self.assertIn("Exec=docseek gui", text)
+
+    def test_package_desktop_entry_icon_exists_in_package(self):
+        """菜单/桌面快捷方式的图标必须真在包里，且写成绝对路径。"""
+        deb = self._latest_deb()
+        if not deb:
+            self.skipTest("没有现成的 deb")
+        tmp = self._extract(deb)
+        self.addCleanup(_trash, tmp)
+        path = os.path.join(tmp, "usr/share/applications/docseek.desktop")
+        icon = ""
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("Icon="):
+                    icon = line.strip().partition("=")[2]
+                    break
+        self.assertTrue(icon.startswith("/usr/share/icons/"), icon)
+        self.assertTrue(os.path.isfile(os.path.join(tmp, icon.lstrip("/"))),
+                        "desktop 里写的图标 %r 不在包里" % icon)
 
     def test_package_metadata_is_honest(self):
         deb = self._latest_deb()

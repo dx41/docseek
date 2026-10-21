@@ -17,8 +17,8 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gio, GLib, Gtk, Pango  # noqa: E402
 
-from .. import (config, history, preview, procs, textstore,   # noqa: E402
-                tokenizer)
+from .. import (__version__, config, history, preview, procs,   # noqa: E402
+                textstore, tokenizer)
 from ..extract import ExtractError, extract, ocr   # noqa: E402
 from ..index import Builder, Index                # noqa: E402
 from ..search import (SORT_MODES, DEFAULT_SORT, Searcher,   # noqa: E402
@@ -845,7 +845,7 @@ class MainWindow(Gtk.Window):
     def on_about(self, *_args):
         dialog = Gtk.AboutDialog(transient_for=self, modal=True)
         dialog.set_program_name("DocSeek")
-        dialog.set_version("0.1.0")
+        dialog.set_version(__version__)
         dialog.set_comments("本地文档内容搜索：中文 bigram + SQLite FTS5 索引，"
                             "命中片段内联显示，PDF/Office 版面按需渲染预览。")
         dialog.set_license_type(Gtk.License.GPL_3_0)

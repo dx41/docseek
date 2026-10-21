@@ -8,11 +8,14 @@ GenericName[zh_CN]=文档内容搜索
 Comment=Search inside documents: Chinese bigram index, match snippets, layout preview
 Comment[zh_CN]=搜文档正文：中文分词索引、命中片段、版面还原预览
 Exec=docseek gui
-Icon=docseek
+# 用绝对路径而不是主题名 Icon=docseek：桌面（peony-qt）的图标索引在登录时加载并缓存，
+# 如果是在登录之后才装的包，"添加到桌面快捷方式"会拿到一个空白图标，直到注销重进。
+# 绝对路径由 QIcon/Gtk 直接按文件加载，绕开主题缓存。
+Icon=/usr/share/icons/hicolor/256x256/apps/docseek.png
 Terminal=false
 StartupNotify=true
-# GTK 不是合法分类；菜单只在 Office/Utility 下才认。
-Categories=Office;Utility;
+# GTK 不是合法分类；Office 与 Utility 都是主分类，同时写会让菜单里出现两项，只留一项。
+Categories=Office;
 # 让任务栏/开始菜单按 WM_CLASS 找到本程序的图标（cli.py 里设置了同名 prgname）。
 StartupWMClass=docseek
 Keywords=search;find;document;text;全文;搜索;文档;
