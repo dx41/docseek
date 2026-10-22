@@ -23,6 +23,9 @@ except (ImportError, ValueError):        # pragma: no cover
 
 from docseek.search import Result, parse_query     # noqa: E402
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _scratch import discard as _discard_scratch   # noqa: E402
+
 
 _launch_patch = None
 _reveal_patch = None
@@ -85,22 +88,12 @@ def _remove_files(*paths):
 
 
 def _remove_tree(path):
-    """删掉测试自建的临时目录：本机约定不做物理删除，一律进回收站。
+    """清理测试自建的临时目录：自造临时目录直接删，其它进回收站。
 
-    和 test_core.py 的 `_discard` 同一套路：`gio trash` 不在就留在原地，
-    绝不 `rm -rf`/`shutil.rmtree`。
+    以前的写法一律 `gio trash`，跑一趟测试就往往回收站里塞几个目录（用户报障）。
+    规则见 tests/_scratch.py。
     """
-    path = str(path)
-    if not os.path.exists(path):
-        return
-    gio = shutil.which("gio")
-    if not gio:
-        return
-    try:
-        subprocess.run([gio, "trash", "--", path], timeout=30,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except (OSError, subprocess.SubprocessError):
-        pass
+    _discard_scratch(path)
 
 
 class HighlightOffsetTest(unittest.TestCase):
@@ -123,10 +116,7 @@ class HighlightOffsetTest(unittest.TestCase):
 
     def tearDown(self):
         self.window.destroy()
-        # 测试自建的临时目录交由 tempfile 语义处理：直接进回收站
-        import subprocess
-        subprocess.run(["gio", "trash", self.tmp],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # 临时目录已由 setUp 里的 addCleanup(_remove_tree, ...) 负责清理
 
     def _tagged_texts(self, name):
         buffer = self.window.textbuffer

@@ -226,6 +226,11 @@ update-desktop-database ~/.local/share/applications 2>/dev/null || true
 菜单里的「清理版面渲染缓存」与 `docseek cache --clear-ocr/--clear-render` 也只作用于这些缓存
 （逐条做白名单校验）。
 
+这些中间目录是**直接删掉**的，不会进回收站。0.1.5 及以前为了守"不物理删除"的约定，每个
+预览/转换的临时目录都用 `gio trash` 丢进回收站，用一阵子回收站里就多出一堆
+`docseek-pg-*` / `docseek-lo-*`（0.1.6 修：自建中间产物由 `config.cleanup_temp` 按
+「缓存目录之下 + 已知前缀」白名单直接删；白名单之外的路径仍然只进回收站）。
+
 ## 实测性能（本机 aarch64）
 
 | 操作 | 耗时 |

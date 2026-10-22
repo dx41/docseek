@@ -616,18 +616,6 @@ def _mkdtemp():
         raise ExtractError("无法创建临时目录：%s" % exc)
 
 
-def _trash(path):
-    """把本次自建的临时产物送进回收站（遵守“不物理删除”约定），失败就留在原地。"""
-    gio = shutil.which("gio")
-    if not gio or not path:
-        return
-    try:
-        subprocess.run([gio, "trash", str(path)], timeout=TIMEOUT,
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except (OSError, subprocess.SubprocessError):
-        pass
-
-
 def _soffice_html(src, out_dir):
     """用 LibreOffice 把文档导出为 HTML。
 
@@ -696,7 +684,7 @@ def _lo_html_text(src):
             raise ExtractError("读取转换结果失败：%s" % exc)
         text = _html_to_text(_decode(raw))
     finally:
-        _trash(out_dir)                             # 临时目录进回收站，不物理删除
+        config.cleanup_temp(out_dir)                # 自建中间目录直接删，别塞用户回收站
     if not text.strip():
         raise ExtractError("LibreOffice HTML 导出未提取到文本")
     return clean_text(text, MAX_CHARS)

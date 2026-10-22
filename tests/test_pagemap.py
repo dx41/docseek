@@ -3,21 +3,26 @@
 原则：
 * 不依赖固定样本：运行时在有界范围内扫真实 PDF / DOCX，扫不到就 skipTest；
 * 校验用「另一条路」算期望值（测试自己调 pdftotext / pdfinfo），不复用被测内部函数；
-* 测试产物写到 docseek 自己的缓存目录或 tempfile，临时目录用 gio trash 回收，
-  绝不做物理删除。
+* 测试产物写到 docseek 自己的缓存目录或 tempfile，临时目录由 tests/_scratch.py
+  清理：本项目自造的直接删，其余才进回收站。
 """
 
 import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from docseek import config
 from docseek.preview import pagemap
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _scratch import discard as _discard_scratch   # noqa: E402
 
 PDFTOTEXT = shutil.which("pdftotext")
 PDFINFO = shutil.which("pdfinfo")
@@ -34,19 +39,8 @@ PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
 
 def _discard(path):
-    """把测试临时目录送进回收站（失败就留着，绝不 rm）。"""
-    path = str(path)
-    if not os.path.exists(path):
-        return True
-    gio = shutil.which("gio")
-    if not gio:
-        return False
-    try:
-        proc = subprocess.run([gio, "trash", "--", path], timeout=30,
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return proc.returncode == 0
-    except (OSError, subprocess.SubprocessError):
-        return False
+    """清理测试临时目录：自造临时目录直接删，其它走回收站（见 tests/_scratch.py）。"""
+    return _discard_scratch(path)
 
 
 def _scan(exts, limit=40, budget=SCAN_BUDGET):
@@ -521,6 +515,48 @@ class TestSyntheticPdf(unittest.TestCase):
         self.assertIsNotNone(png)
         with open(str(png), "rb") as fh:
             self.assertEqual(fh.read(8), PNG_MAGIC)
+
+
+
+class TestTempHygiene(unittest.TestCase):
+    """自建的中间目录不许塞进用户回收站。
+
+    用户报障：跑一阵子后，回收站里多出一堆 docseek-pg-* / docseek-lo-* 目录。
+    这些是预览过程的中间产物，程序自己能重建，本来就不该占用用户的回收站。
+    """
+
+    def test_own_cache_dir_is_deleted_not_trashed(self):
+        config.ensure_dirs()
+        work = config.temp_dir("docseek-pg-")
+        (work / "page-1.png").write_bytes(b"x")
+        with mock.patch.object(pagemap, "_trash") as trash:
+            self.assertTrue(pagemap._recycle(work))
+        self.assertFalse(work.exists(), "自建缓存目录应该被删掉")
+        self.assertFalse(trash.called, "自家缓存不该走 gio trash")
+
+    def test_render_scratch_prefix_is_whitelisted(self):
+        config.ensure_dirs()
+        work = config.temp_dir("render-")
+        self.assertTrue(config.cleanup_temp(work))
+        self.assertFalse(work.exists())
+
+    def test_unknown_name_falls_back_to_trash(self):
+        config.ensure_dirs()
+        odd = config.temp_dir("keepme-")          # 在缓存目录里，但不在白名单
+        try:
+            with mock.patch.object(pagemap, "_trash", return_value=True) as trash:
+                self.assertTrue(pagemap._recycle(odd))
+            self.assertTrue(trash.called, "白名单之外的路径要交回回收站")
+        finally:
+            shutil.rmtree(odd, ignore_errors=True)
+
+    def test_paths_outside_cache_dir_are_never_deleted(self):
+        outside = tempfile.mkdtemp(prefix="docseek-pg-")   # 名字对，但位置不对
+        try:
+            self.assertFalse(config.cleanup_temp(outside))
+            self.assertTrue(os.path.isdir(outside), "缓存目录之外一律不许删")
+        finally:
+            shutil.rmtree(outside, ignore_errors=True)
 
 
 if __name__ == "__main__":

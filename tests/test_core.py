@@ -17,8 +17,8 @@
 * 只用标准库 unittest，不引入任何新依赖；
 * 所有产物（索引库、样本文件）都在 ``tempfile.mkdtemp()`` 里，绝不写入 /home、/data
   下的用户文件；真实样本只读打开（并断言 size/mtime 未变）；
-* 按本机约定不做物理删除：临时目录优先 ``gio trash`` 进回收站，
-  gio 不可用时留在 tempfile 目录里（不做 rm/unlink）；
+* 用户文件一律不做物理删除（走回收站）；测试自己造的临时目录例外——
+  它们是"一次运行就作废"的中间产物，直接删掉，别塞进用户回收站（见 tests/_scratch.py）；
 * 需要真实 PDF 时在 cwd/家目录//data 下有界扫描（限时、限深、限量），
   找不到就 ``skipTest``。
 """
@@ -35,6 +35,9 @@ import unittest
 import zipfile
 from pathlib import Path
 from xml.sax.saxutils import escape as xml_escape
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _scratch import discard as _discard_scratch   # noqa: E402
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
@@ -65,18 +68,12 @@ SCAN_PRUNE = {"node_modules", "__pycache__", ".git", ".hg", ".svn", ".cargo",
 
 
 def _discard(path):
-    """把测试临时目录送进回收站（本机约定：不做物理删除；失败就留在原地）。"""
-    path = str(path)
-    if not os.path.exists(path):
-        return
-    gio = shutil.which("gio")
-    if not gio:
-        return
-    try:
-        subprocess.run([gio, "trash", "--", path], timeout=30,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except (OSError, subprocess.SubprocessError):
-        pass
+    """清理测试临时目录：本项目自造的临时目录直接删，其它才进回收站。
+
+    以前的写法一律 `gio trash`，结果每次跑测试都往用户回收站塞几个目录
+    （用户报障过）。规则见 tests/_scratch.py。
+    """
+    _discard_scratch(path)
 
 
 def core_cfg(**overrides):

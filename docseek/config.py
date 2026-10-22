@@ -123,7 +123,8 @@ def temp_dir(prefix="docseek-"):
 def cleanup_temp(path):
     """只清理 CACHE_DIR 之下、名字带已知前缀的临时目录；其它路径一律拒绝。
 
-    这是应用自身的缓存卫生（README 已写明），不会碰任何用户文件。
+    这是应用自身的缓存卫生（README 已写明），不会碰任何用户文件：中间产物
+    直接删（不进回收站），免得用户回收站里堆满 docseek-pg-* 之类的目录。
     """
     try:
         target = Path(path).resolve()
@@ -132,7 +133,7 @@ def cleanup_temp(path):
         return False
     if target == root or root not in target.parents:
         return False
-    if not target.name.startswith(("docseek-", "ocr-", "lo-")):
+    if not target.name.startswith(("docseek-", "ocr-", "lo-", "render-")):
         return False
     shutil.rmtree(target, ignore_errors=True)
     return True

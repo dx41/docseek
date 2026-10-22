@@ -12,7 +12,7 @@
 * 真实样本（在 /data、/home 里现找，找不到就 skip）：.doc/.xls/.rtf/.wps/.et。
 
 注意：按本机约定不做物理删除，因此测试临时文件统一放在“一次运行一个”的临时根目录
-（/tmp/docseek-test-legacy-XXXX，tmpfs）里，全部跑完后整目录 `gio trash` 进回收站；
+（/tmp/docseek-test-legacy-XXXX，tmpfs）里，全部跑完后整目录直接删除（不进回收站；
 用户文件只读不改、不移动、不删除。
 """
 
@@ -23,6 +23,10 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _scratch import discard as _discard_scratch   # noqa: E402
 from unittest import mock
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -42,15 +46,8 @@ _TMP_ROOT = tempfile.mkdtemp(prefix="docseek-test-legacy-")
 
 
 def tearDownModule():
-    """整轮测试结束后清理临时根目录：进回收站，失败就留在 /tmp（重启即清）。"""
-    gio = shutil.which("gio")
-    if not gio:
-        return
-    try:
-        subprocess.run([gio, "trash", _TMP_ROOT], timeout=60,
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except (OSError, subprocess.SubprocessError):
-        pass
+    """整轮测试结束后清理临时根目录（规则见 tests/_scratch.py）。"""
+    _discard_scratch(_TMP_ROOT)
 
 
 # --------------------------------------------------------------------------
@@ -711,6 +708,30 @@ class TestRealPresentations(unittest.TestCase):
             self.assertTrue(result.text.strip(), path)
             self.assertFalse(legacy._looks_like_junk(result.text),
                              "%s 抽出了疑似乱码" % path)
+
+
+
+class TestTempHygiene(unittest.TestCase):
+    """旧格式转换的中间目录不许进用户回收站（用户报障：回收站里多出目录）。"""
+
+    def test_lo_html_leaves_no_cache_dir(self):
+        from docseek import config
+        config.ensure_dirs()
+        tmp = make_tmpdir()
+        src = write_file(tmp, "样本.odt", b"x")
+
+        def fake_soffice(_src, out_dir):
+            path = os.path.join(out_dir, "sample.html")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("<html><body>表格内容</body></html>")
+            return ""
+
+        before = set(Path(config.CACHE_DIR).glob("docseek-legacy-*"))
+        with mock.patch.object(legacy, "_soffice_html", fake_soffice):
+            text = legacy._lo_html_text(src)
+        self.assertIn("表格内容", text)
+        after = set(Path(config.CACHE_DIR).glob("docseek-legacy-*"))
+        self.assertEqual(after - before, set(), "转换完必须把中间目录清掉")
 
 
 if __name__ == "__main__":

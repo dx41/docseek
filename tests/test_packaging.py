@@ -12,6 +12,9 @@ import subprocess
 import sys
 import unittest
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _scratch import discard as _discard_scratch   # noqa: E402
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
@@ -237,15 +240,8 @@ class BuiltPackageTest(unittest.TestCase):
 
 
 def _trash(path):
-    """测试产物按本仓库纪律走回收站，不做物理删除。"""
-    if not os.path.isdir(path):
-        return
-    if subprocess.call(["which", "gio"], stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL) == 0:
-        subprocess.call(["gio", "trash", "--", path])
-    else:
-        import shutil
-        shutil.rmtree(path, ignore_errors=True)
+    """清理解包目录：自造临时目录直接删，其它走回收站（见 tests/_scratch.py）。"""
+    _discard_scratch(path)
 
 
 if __name__ == "__main__":

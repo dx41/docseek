@@ -8,11 +8,14 @@ OUT=${1:-"$HOME/下载"}
 VERSION=$(python3 -c "import sys; sys.path.insert(0, '$ROOT'); import docseek; print(docseek.__version__)")
 PKG=docseek_${VERSION}_all
 STAGE=$(mktemp -d "${TMPDIR:-/tmp}/docseek-deb-XXXXXX")
-# 别在 /tmp 里留打包残留；本机纪律：删除一律 `gio trash`，不做物理删除。
+# 别在 /tmp 里留打包残留。打包中间目录是脚本自己 mktemp 出来的，直接删；
+# 只有"用户文件"才必须走回收站 —— 以前一律 gio trash，结果每次打包都往用户
+# 回收站里塞一个 docseek-deb-* 目录（用户报障过）。
 clean_stage() {
-    if command -v gio >/dev/null 2>&1; then
-        gio trash -- "$STAGE" 2>/dev/null || true
-    fi
+    case "$STAGE" in
+        "${TMPDIR:-/tmp}"/docseek-deb-*) rm -rf -- "$STAGE" ;;
+        *) echo "跳过清理（路径不在白名单）：$STAGE" >&2 ;;
+    esac
 }
 trap clean_stage EXIT
 

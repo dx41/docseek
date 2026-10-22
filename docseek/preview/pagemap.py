@@ -18,7 +18,10 @@ sha1 由「绝对路径 + mtime + size」算出（图片再加页码与 dpi）�
 * 外部命令（pdftotext / pdftoppm / pdfinfo / soffice）都带超时，异常一律吞掉；
 * 清理只允许发生在 config.PDF_CACHE / config.IMG_CACHE 之下，并且逐条做白名单
   路径校验（clear_cache 就是干这个的，缓存回收必须真正释放磁盘）；
-* 自建的临时目录改用 `gio trash` 回收，绝不物理删除。
+* 自建的缓存临时目录（docseek-pg-* / docseek-lo-* / render-*，都在
+  config.CACHE_DIR 之下）用 config.cleanup_temp 直接删掉——那是程序自己的中间
+  产物，不是用户文件；以前一律 `gio trash`，结果每预览一次就往用户回收站塞一个
+  目录（用户报障）。不在白名单里的路径才回退到 `gio trash`。
 """
 
 import hashlib
@@ -140,6 +143,17 @@ def _trash(path):
         return False
 
 
+def _recycle(path):
+    """回收自建临时目录：自己的缓存直接删，其它路径才送进回收站。
+
+    用户报障：跑一阵子后回收站里多出一堆 docseek-pg-* / docseek-lo-* 目录。
+    这些是预览过程的中间产物，程序自己能重建，本来就不该占用用户的回收站。
+    """
+    if config.cleanup_temp(path):
+        return True
+    return _trash(path)
+
+
 def _is_temp_pdf(path):
     """是否是 LibreOffice 转换临时目录（docseek-lo-*）里的 PDF。"""
     try:
@@ -161,7 +175,7 @@ def _release_temp_pdf(path):
         return False
     if not _within(real_parent, real_cache):
         return False
-    return _trash(parent)
+    return _recycle(parent)
 
 
 def _within(path, real_root):
@@ -308,7 +322,7 @@ def to_pdf(src, cache=True, profile=None):
             shutil.move(str(produced), str(dest))
         except (OSError, shutil.Error):
             return produced      # 挪不动就先用临时产物，功能不受影响
-    _trash(produced.parent)      # 回收 LibreOffice 的 docseek-lo-* 临时目录
+    _recycle(produced.parent)    # 回收 LibreOffice 的 docseek-lo-* 临时目录
     return dest
 
 
@@ -439,15 +453,15 @@ def _render_pdf_page(pdf_path, page, dpi, cache):
     except OSError:
         produced = []
     if not produced:
-        _trash(work)
+        _recycle(work)
         return None
     png = produced[0]
     try:
         if png.stat().st_size <= 0:
-            _trash(work)
+            _recycle(work)
             return None
     except OSError:
-        _trash(work)
+        _recycle(work)
         return None
 
     if dest is None:
@@ -459,7 +473,7 @@ def _render_pdf_page(pdf_path, page, dpi, cache):
             shutil.move(str(png), str(dest))
         except (OSError, shutil.Error):
             return png
-    _trash(work)
+    _recycle(work)
     return dest
 
 
